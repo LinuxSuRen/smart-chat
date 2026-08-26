@@ -6,11 +6,12 @@
 // produces. Run: node test/bridge.mjs
 import os from 'node:os'
 import { Context } from '@deepseek-ai/cordis'
+import Tools from '@deepseek-ai/dsh-tools'
 import SessionStore from '@deepseek-ai/dsh-session'
 import ApprovalSvc from '@deepseek-ai/dsh-user-approval'
 import {
-  MemorySettings, FakeWebServer, FakeAgents, makeTurnScript,
-  call, openSse, waitFor, waitForRoute, check, finish,
+  MemorySettings, FakeWebServer, FakeAgents, FakeSystemPrompt, makeTurnScript,
+  echoEntry, call, openSse, waitFor, waitForRoute, scopeOf, check, finish,
 } from './helpers.mjs'
 
 async function buildApp(bridgeOpts) {
@@ -178,6 +179,63 @@ async function main() {
     check('no approval_required frame', !sse.frames().some((f) => f.event === 'approval_required'))
     check('outcome allowed-once', D.record.approvalOutcome === 'allowed-once', D.record)
     sse.req.emit('close')
+  }
+
+  console.log('# focus: chat agents see only MCP tools and the MCP persona')
+  {
+    // Full stack for this section: real tools registry with a non-MCP global
+    // tool registered next to the echo MCP server, plus the prompt stub so
+    // the persona section lands somewhere assertable.
+    const app = new Context()
+    await app.plugin(FakeSystemPrompt).await()
+    await app.plugin(Tools).await()
+    await app.plugin(SessionStore).await()
+    await app.plugin(MemorySettings).await()
+    await app.plugin(FakeWebServer).await()
+    await app.plugin(FakeAgents).await()
+    app.get('tools').register({
+      name: 'local_demo',
+      description: 'a non-MCP global tool that must stay invisible to chat agents',
+      parameters: { type: 'object' },
+      output: { schema: { type: 'object' }, render: (value) => [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value ?? {}) }] },
+      async execute() { return { content: [{ type: 'text', text: 'local ok' }] } },
+    })
+    const plugin = await import('../lib/index.js')
+    await app.plugin(plugin, { servers: [echoEntry()], bridge: { enabled: true, prefix: '/smart-chat' } }).await()
+    const handler = await waitForRoute(app.get('webServer'), '/smart-chat')
+    await waitFor(() => app.get('tools').schemas(undefined).some((s) => s.name === 'mcp__echo__echo'), { what: 'echo tool' })
+
+    const created = await call(handler, 'POST', '/smart-chat/sessions', '{}')
+    const sessionId = created.json.sessionId
+    const agent = app.get('agents').store.get(sessionId)
+    check('agent has scoped ctx', agent?.ctx !== undefined)
+    const scope = scopeOf(agent.ctx)
+    check('agent ctx is scoped', scope !== undefined)
+
+    const visible = () => app.get('tools').schemas(scope).map((s) => s.name)
+    check('mcp tool visible to the agent', visible().includes('mcp__echo__echo'), visible())
+    check('non-mcp global tool hidden', !visible().includes('local_demo'), visible())
+    check('global view still sees both', app.get('tools').schemas(undefined).some((s) => s.name === 'local_demo'))
+
+    const persona = app.get('systemPrompt').sections.get('smart-chat:persona')
+    check('persona section registered', persona !== undefined && persona.text.includes('MCP servers'), persona)
+    check('persona ordered after deployment persona', persona?.order === 1, persona?.order)
+
+    console.log('# focus: visibility follows server changes')
+    const add = await call(handler, 'POST', '/smart-chat/servers', JSON.stringify({ servers: [echoEntry(), echoEntry('echo2')] }))
+    check('add accepted', add.status === 200, add)
+    await waitFor(() => app.get('tools').schemas(undefined).some((s) => s.name === 'mcp__echo2__echo'), { what: 'echo2 mounted' })
+    await waitFor(() => visible().includes('mcp__echo2__echo'), { what: 'restriction updated with echo2' })
+    check('new server tool becomes visible', visible().includes('mcp__echo2__echo'), visible())
+    check('non-mcp tool still hidden', !visible().includes('local_demo'), visible())
+
+    const remove = await call(handler, 'POST', '/smart-chat/servers', JSON.stringify({ servers: [echoEntry('echo2')] }))
+    check('remove accepted', remove.status === 200, remove)
+    await waitFor(() => !app.get('tools').schemas(undefined).some((s) => s.name === 'mcp__echo__echo'), { what: 'echo unmounted' })
+    await waitFor(() => !visible().includes('mcp__echo__echo'), { what: 'restriction dropped echo' })
+    check('removed server tool disappears', !visible().includes('mcp__echo__echo'), visible())
+
+    await app.fiber.dispose()
   }
 
   await A.app.fiber.dispose()

@@ -7,7 +7,7 @@ import Tools from '@deepseek-ai/dsh-tools'
 import SessionStore from '@deepseek-ai/dsh-session'
 import {
   MemorySettings, ReadOnlySettings, FakeWebServer, FakeSystemPrompt, FakeAgents,
-  echoEntry, call, waitFor, waitForRoute, check, finish,
+  echoEntry, zombieEntry, call, waitFor, waitForRoute, check, finish,
 } from './helpers.mjs'
 
 async function buildApp(settings = MemorySettings, servers = []) {
@@ -73,6 +73,64 @@ async function main() {
     const { app, handler } = await buildApp(ReadOnlySettings, [])
     const r = await call(handler, 'POST', '/smart-chat/servers', JSON.stringify({ servers: [echoEntry()] }))
     check('read-only 503', r.status === 503 && r.json?.error !== undefined, r)
+    await app.fiber.dispose()
+  }
+
+  console.log('# engine: stale MCP session auto-remounts (session not found)')
+  {
+    // The zombie server reports its pid in the tool description and makes
+    // its FIRST tools/call fail with the exact streamable-http stale-session
+    // text. The watchdog must notice the failed result (via the session-event
+    // feed, like the real agent loop records it) and remount the fiber — the
+    // new process has a different pid.
+    const { app, handler } = await buildApp(MemorySettings, [zombieEntry()])
+    const pidOf = () => {
+      const schema = app.get('tools').schemas(undefined).find((s) => s.name === 'mcp__zombie__echo')
+      const m = /pid-(\d+)/.exec(schema?.description ?? '')
+      return m === null ? undefined : m[1]
+    }
+    const firstPid = await waitFor(() => pidOf(), { what: 'zombie tool registration' })
+
+    // Execute the tool for real so the failure text comes from the actual
+    // MCP error path, not from the test's imagination. Failures come back as
+    // { isError: true, content, error } — not as rejections.
+    let failureText = ''
+    try {
+      const result = await app.get('tools').execute({ callId: 'c1', name: 'mcp__zombie__echo', arguments: { text: 'hi' }, signal: new AbortController().signal })
+      if (result?.isError === true) {
+        failureText = [
+          result.error?.message,
+          ...(result.content ?? []).map((b) => (b?.type === 'text' ? b.text : '')),
+        ].filter(Boolean).join(' ')
+      }
+    } catch (error) {
+      failureText = error instanceof Error ? error.message : String(error)
+    }
+    check('real failure mentions session not found', /session not found/i.test(failureText), failureText)
+    if (failureText === '') failureText = 'Error POSTing to endpoint: session not found'
+
+    // Record the failure the way the agent loop would (durable tool/result).
+    const session = app.get('sessions').create('session-watchdog')
+    session.append('turn/start', { turn: 1 })
+    session.append('tool/call', { turn: 1, step: 1, callId: 'c1', name: 'mcp__zombie__echo', arguments: JSON.stringify({ text: 'hi' }) })
+    session.append('tool/result', {
+      turn: 1,
+      step: 1,
+      message: {
+        role: 'user',
+        content: [{ type: 'tool-result', toolCallId: 'c1', isError: true, content: [{ type: 'text', text: failureText }] }],
+        source: { kind: 'tool', callId: 'c1' },
+      },
+    }, { surfaceOp: 'append' })
+
+    const secondPid = await waitFor(() => (pidOf() !== undefined && pidOf() !== firstPid ? pidOf() : undefined), { timeout: 20_000, what: 'zombie remount (new pid)' })
+    check('fiber was replaced', secondPid !== firstPid, { firstPid, secondPid })
+
+    const status = await call(handler, 'GET', '/smart-chat/servers.json')
+    const row = status.json?.servers?.find((s) => s.serverName === 'zombie')
+    check('server healthy after remount', row?.state === 'connected' && row?.toolCount === 1, row)
+    check('remount noted in diagnostics', (row?.logs ?? []).some((l) => l.includes('remounting')), row?.logs)
+
     await app.fiber.dispose()
   }
 

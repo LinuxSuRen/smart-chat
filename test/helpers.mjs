@@ -2,6 +2,9 @@
 import { EventEmitter } from 'node:events'
 import { Service } from '@deepseek-ai/cordis'
 import { SettingsProvider } from '@deepseek-ai/dsh-settings'
+import { createScope, scopeOf } from '@deepseek-ai/dsh-scope'
+
+export { scopeOf }
 
 // A minimal stdio MCP server with one `echo` tool (placeholder data only).
 export const ECHO_MCP = `
@@ -22,6 +25,36 @@ rl.on('line', (line) => {
 
 export function echoEntry(serverName = 'echo') {
   return { serverName, transport: 'stdio', command: process.execPath, args: ['-e', ECHO_MCP] }
+}
+
+// A stdio MCP server whose tool description embeds its pid and whose FIRST
+// tools/call fails with the exact stale streamable-http session text (later
+// calls echo normally). Used to verify the session-loss watchdog remounts
+// the fiber (observable via the pid changing).
+export const ZOMBIE_MCP = `
+const readline = require('readline');
+const rl = readline.createInterface({ input: process.stdin });
+const send = (msg) => process.stdout.write(JSON.stringify(msg) + '\\n');
+let calls = 0;
+rl.on('line', (line) => {
+  let req; try { req = JSON.parse(line); } catch { return; }
+  if (req.method === 'initialize') {
+    send({ jsonrpc: '2.0', id: req.id, result: { protocolVersion: req.params?.protocolVersion ?? '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'zombie', version: '1.0.0' } } });
+  } else if (req.method === 'tools/list') {
+    send({ jsonrpc: '2.0', id: req.id, result: { tools: [{ name: 'echo', description: 'echo tool from pid-' + process.pid, inputSchema: { type: 'object', properties: { text: { type: 'string' } } } }] } });
+  } else if (req.method === 'tools/call') {
+    calls += 1;
+    if (calls === 1) {
+      send({ jsonrpc: '2.0', id: req.id, result: { content: [{ type: 'text', text: 'Error POSTing to endpoint: session not found' }], isError: true } });
+    } else {
+      send({ jsonrpc: '2.0', id: req.id, result: { content: [{ type: 'text', text: 'echo: ' + (req.params?.arguments?.text ?? '') }] } });
+    }
+  }
+});
+`
+
+export function zombieEntry(serverName = 'zombie') {
+  return { serverName, transport: 'stdio', command: process.execPath, args: ['-e', ZOMBIE_MCP] }
 }
 
 export function mockReq({ method = 'GET', url = '/', headers = {} } = {}) {
@@ -111,12 +144,17 @@ export function finish(suite) {
   console.log(`all ${suite} tests passed`)
 }
 
-/** Minimal systemPrompt stub: dsh-tools injects it but only calls tools(). */
+/** systemPrompt stub: dsh-tools injects it; sections are recorded so tests
+ *  can assert agent-scoped persona registration. */
 export class FakeSystemPrompt extends Service {
   static provide = 'systemPrompt'
+  sections = new Map()
   constructor(ctx) { super(ctx, 'systemPrompt') }
   tools() { return () => {} }
-  section() { return () => {} }
+  section(section) {
+    this.sections.set(section.name, section)
+    return () => { this.sections.delete(section.name) }
+  }
   context() { return () => {} }
   variable() { return () => {} }
 }
@@ -156,8 +194,11 @@ export class FakeWebServer extends Service {
 
 /**
  * Fake agents service: creates REAL sessions (via ctx.sessions) driven by a
- * test-supplied `emitTurn(agent, message)` script. Only the surface the
- * bridge touches is implemented (followup/cancel/status).
+ * test-supplied `emitTurn(agent, message)` script. Mirrors the real factory's
+ * composition boundary: the create options' `setup` receives a genuinely
+ * scoped context (createScope + extend, like dsh-agent-loop does) BEFORE the
+ * agent is published, so scoped sections/restrictions/guards land exactly
+ * where the real ones would.
  */
 export class FakeAgents extends Service {
   static provide = 'agents'
@@ -178,8 +219,17 @@ export class FakeAgents extends Service {
       followup(message) { void service.emitTurn?.(agent, message) },
       cancel() { service.cancelCount += 1 },
     }
+    const scope = createScope(this.ctx, agent)
+    agent.ctx = scope.ctx.extend({ agent })
+    await options.setup?.(agent.ctx)
     this.store.set(agent.id, agent)
-    return { agent, dispose: async () => { this.store.delete(agent.id) } }
+    return {
+      agent,
+      dispose: async () => {
+        this.store.delete(agent.id)
+        await scope.dispose()
+      },
+    }
   }
   get(id) { return this.store.get(id) }
 }
