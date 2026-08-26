@@ -1,6 +1,26 @@
-// Unit tests for the pure server-entry validators. Run: node test/unit.mjs
+// Unit tests for the pure server-entry validators and the embedded page.
+// Run: node test/unit.mjs
+import { pageHtml } from '../lib/page.js'
 import { validateServerEntry, validateServerList } from '../lib/servers.js'
 import { check, finish } from './helpers.mjs'
+
+console.log('# page: embedded script compiles')
+{
+  // The page is emitted through a template literal, so regex escapes (\\n,
+  // \\*) must survive into the output; a raw newline would split a regex
+  // across lines and kill the whole script with a browser SyntaxError.
+  // Compiling the extracted <script> body catches that class of bug here.
+  const html = pageHtml('/smart-chat')
+  const match = /<script>([\s\S]*)<\/script>/.exec(html)
+  check('script tag found', match !== null)
+  if (match !== null) {
+    let err = null
+    try { new Function(match[1]) } catch (e) { err = e }
+    check('script parses', err === null, String(err))
+  }
+  check('page under 50KB', Buffer.byteLength(html) < 50 * 1024, Buffer.byteLength(html))
+  check('prefix interpolated', html.includes('const PREFIX = "/smart-chat"'))
+}
 
 console.log('# validateServerEntry')
 
