@@ -1,0 +1,45 @@
+# Composition layer shipped with smart-chat.
+#
+# `dsh plugin add smart-chat` (from a local path or registry) appends this
+# bundle to the profile's layer stack; the patch below inserts the
+# mcp-chat-web row on the next boot — no manual patch-file editing needed.
+#
+# `servers:` starts empty. Manage servers from the chat page itself
+# (server bar -> "Servers" panel), or declare a YAML baseline here — the
+# page edits land in the dsh settings user layer and merge ON TOP of this
+# base layer (this config is the base, page edits override it).
+#
+# Example (all values below are placeholders):
+#
+# - insert:
+#     - id: mcp-chat-web
+#       name: smart-chat
+#       config:
+#         servers:
+#           - serverName: demo-stdio
+#             transport: stdio
+#             command: /usr/local/bin/demo-mcp-server
+#             args: ["--verbose"]
+#             env:
+#               DEMO_API_BASE_URL: https://api.example.com
+#               DEMO_API_PASSWORD: secret
+#           - serverName: demo-http
+#             transport: streamable-http
+#             url: https://mcp.example.com/mcp
+#             headers:
+#               Authorization: Bearer demo-placeholder-token
+#         bridge:
+#           enabled: true
+#           prefix: /smart-chat
+#           # token: change-me-local-only        # require Bearer/?token= on every route
+#           # autoApproveTools: false            # true = auto-allow mcp__ tool calls (local trusted servers only!)
+#           # approvalTimeoutMs: 120000          # pending approvals fail closed (deny) after this
+#           # cancelOnDisconnect: false          # true = abort the running turn when the page disconnects
+- insert:
+    - id: mcp-chat-web
+      name: smart-chat
+      config:
+        servers: []
+        bridge:
+          enabled: true
+          prefix: /smart-chat
