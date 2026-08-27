@@ -123,7 +123,7 @@ export function openSse(handler, url, headers = {}) {
 export async function waitFor(predicate, { timeout = 10_000, step = 25, what = 'condition' } = {}) {
   const deadline = Date.now() + timeout
   while (Date.now() < deadline) {
-    const value = predicate()
+    const value = await predicate()
     if (value) return value
     await new Promise((resolve) => setTimeout(resolve, step))
   }

@@ -1,0 +1,90 @@
+/* Reasoning row — harness ReasoningRow: a quiet one-line summary with a
+ * sweep highlight while the model is thinking, expanding to the full
+ * pre-wrap think body when open. */
+
+.root {
+  flex-direction: column;
+  display: flex;
+}
+
+.row {
+  position: relative;
+  overflow: hidden;
+  align-items: center;
+  gap: 6px;
+  display: flex;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 14px;
+  line-height: 24px;
+  min-width: 0;
+}
+
+.root[data-state='running'] .row::after {
+  content: "";
+  inset-block: 0;
+  background: linear-gradient(90deg, transparent 0%, color-mix(in srgb, var(--dsw-alias-bg-base) 60%, transparent) 55%, transparent 100%);
+  pointer-events: none;
+  width: 300px;
+  animation: 2.6s ease-out infinite dsh-reasoning-row-sweep;
+  position: absolute;
+  left: 0;
+}
+
+@keyframes dsh-reasoning-row-sweep {
+  0% { left: -300px }
+  90%, to { left: 100% }
+}
+
+.chevron {
+  flex: none;
+  color: var(--dsw-alias-label-secondary);
+  background: 0 0;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  transition: transform var(--ds-transition-duration-fast) var(--ds-ease-in-out);
+}
+
+.root[data-open='true'] .chevron {
+  transform: rotate(90deg);
+}
+
+.title {
+  font-weight: 400;
+  flex: none;
+}
+
+.separator {
+  background: var(--dsw-alias-label-caption);
+  border-radius: 1px;
+  flex: none;
+  width: 2px;
+  height: 2px;
+  margin: 0 8px;
+}
+
+.summary {
+  min-width: 0;
+  color: var(--dsw-alias-label-tertiary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: auto;
+  overflow: hidden;
+}
+
+.thinkBody {
+  color: var(--dsw-alias-label-tertiary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 4px 0 4px 22px;
+  font-size: 14px;
+  line-height: 24px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .root[data-state='running'] .row::after {
+    animation: none;
+  }
+}

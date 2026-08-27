@@ -5,10 +5,11 @@ A minimal MCP-driven AI chat web tool for [DeepSeek Harness](https://github.com/
 dsh is the engine **and** the MCP client host: you tell smart-chat which MCP servers to talk to
 (from the chat page), it mounts each one as a `@deepseek-ai/dsh-mcp-client` fiber, and every tool
 the agent can call is `mcp__<serverName>__<tool>`. smart-chat itself is only a thin shell —
-no local file/command tools, no second MCP implementation, no build step.
+no local file/command tools, no second MCP implementation.
 
 ```
-极简聊天页（单文件静态 HTML，无构建、无外部请求）
+React chat page (web/, Vite + React 18 + TS — same stack as the dsh web GUI;
+  dsw design tokens, composer/approval/reasoning styling copied from the harness)
       │  普通 HTTP REST + SSE（不碰 dsh 的 WS mux 协议）
       ▼
   smart-chat 桥接插件（本仓库，Cordis host 插件）
@@ -33,11 +34,34 @@ The `cordis.patch.yml` shipped here inserts the `mcp-chat-web` row automatically
 starts empty and you manage servers on the page itself (or declare a YAML baseline — see the
 comments in `cordis.patch.yml`).
 
+## Frontend
+
+`web/` holds the chat page source: **Vite + React 18 + TypeScript**, the same stack as the
+dsh web GUI (`@deepseek-ai/dsh-web-frontend`). The look follows the harness conversation
+surface — the dsw design tokens (`--dsw-alias-*` / `--dsw-static-*`, light + dark), the
+InputBar composer card geometry (22px radius card, 34px round send button, 28px add button,
+216px capped textarea), the amber ApprovalPanel that takes over the composer while a tool
+call waits, the ReasoningRow (collapsible thinking with the running sweep), and the
+turn-status shimmer while a reply streams. Markdown renders through marked + DOMPurify with
+fenced-code banners (language label + copy button).
+
+Build outputs to `lib/public/` (committed, so installs need no web toolchain); the bridge
+serves it with the live `bridge.prefix` injected into `index.html`. Without a build present
+the bridge falls back to the legacy single-file page in `lib/page.js`, so a source checkout
+never breaks.
+
+```sh
+cd web
+npm install
+npm run build     # or: npm run watch
+```
+
 ## HTTP surface (under `bridge.prefix`, default `/smart-chat`)
 
 | Method & path | Body | Result |
 |---|---|---|
-| `GET /` | – | the chat page (token-exempt) |
+| `GET /` | – | the chat page (token-exempt; built React shell, or the legacy single-file page when no build exists) |
+| `GET /assets/*` | – | hashed frontend assets (`immutable` cache; traversal is rejected) |
 | `GET /health` | – | `{ ok, version }` (token-exempt) |
 | `POST /sessions` | `{}` | `201 { sessionId }` |
 | `POST /messages` | `{ sessionId, text }` | `202` (reply arrives over SSE) |
@@ -111,10 +135,13 @@ Host-API reconnaissance notes with sources live in `docs/bridge-api-notes.md`.
 ## Manual acceptance checklist
 
 1. Open `{prefix}/` → server bar shows your MCP servers and tool counts (3s polling).
-2. Send a message → reply streams in token by token (code blocks render).
-3. A tool call appears as a collapsible entry (name, duration, result summary).
-4. An approval card appears inline → Allow/Deny settles it and the turn continues.
+2. Send a message → reply streams token by token; the reasoning row (thinking) collapses
+   and expands above the markdown body; code blocks render with a copy banner.
+3. A tool call appears as a collapsible row (name, duration, result summary).
+4. An approval takes over the composer (amber panel) → Allow/Deny settles it and the
+   turn continues.
 5. Kill the network / close the tab → the page reconnects automatically (or press Reconnect).
-6. "New chat" starts a fresh session.
-7. Add/remove a server in the Servers panel → tools appear/disappear immediately
-   (verified live against a local `http://localhost:8090/mcp` server: 55 tools registered).
+6. "New chat" starts a fresh session; the theme button cycles system/light/dark.
+7. Add/remove a server in the Servers panel (or the composer `+`) → tools appear/disappear
+   immediately (verified live against a local `http://localhost:8090/mcp` server: 55 tools
+   registered).

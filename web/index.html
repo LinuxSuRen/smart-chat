@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>smart-chat</title>
+  <script>
+    // The value is replaced verbatim by the bridge at serve time with the
+    // real prefix, so the same build works under any bridge.prefix value.
+    window.__SMART_CHAT_PREFIX__ = "@@SMART_CHAT_PREFIX@@";
+  </script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="./src/main.tsx"></script>
+</body>
+</html>

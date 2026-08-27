@@ -1,0 +1,201 @@
+/* Feed items: user bubble (right, DeepSeek chat bubble colors), assistant
+ * turn (reasoning row + markdown + turn-status shimmer), tool rows. */
+
+.userRow {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.userBubble {
+  max-width: 85%;
+  background: var(--dsw-specific-bubble);
+  border-radius: 16px;
+  padding: 8px 14px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 16px;
+  line-height: 26px;
+}
+
+.assistant {
+  flex-direction: column;
+  gap: 8px;
+  display: flex;
+  min-width: 0;
+}
+
+.who {
+  color: var(--dsw-alias-label-caption);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.turnStatus {
+  height: 26px;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  background: linear-gradient(90deg,
+    var(--dsw-static-deepseek-500) 0%,
+    var(--dsw-static-deepseek-500) 40%,
+    var(--dsw-static-deepseek-200) 50%,
+    var(--dsw-static-deepseek-500) 60%,
+    var(--dsw-static-deepseek-500) 100%);
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  background-position: 100% 0;
+  background-size: 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  flex: none;
+  align-self: flex-start;
+  align-items: center;
+  animation: 1.8s linear infinite dsh-turn-status-shimmer;
+  display: inline-flex;
+}
+
+.turnStatusClock {
+  font-variant-numeric: tabular-nums;
+  font-weight: 400;
+  font-size: 13px;
+  color: var(--dsw-alias-label-caption);
+  -webkit-text-fill-color: var(--dsw-alias-label-caption);
+  margin-left: 8px;
+}
+
+@keyframes dsh-turn-status-shimmer {
+  to { background-position: 0 0 }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .turnStatus {
+    background-position: 0 0;
+    background-size: 100% 100%;
+    animation: none;
+  }
+}
+
+.stopped {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-tertiary);
+  border-radius: 6px;
+  align-self: flex-start;
+  padding: 0 6px;
+  font-size: 11px;
+  line-height: 18px;
+}
+
+/* tool row */
+.toolRoot {
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-base);
+  overflow: hidden;
+}
+
+.toolRoot[data-state='error'] {
+  border-color: var(--dsw-alias-state-error-secondary);
+}
+
+.toolSummary {
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  display: flex;
+  list-style: none;
+  flex-wrap: wrap;
+}
+
+.toolSummary::-webkit-details-marker {
+  display: none;
+}
+
+.toolDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--dsw-alias-state-warn-primary);
+}
+
+.toolDot[data-state='done'] {
+  background: var(--dsw-alias-state-success-primary);
+}
+
+.toolDot[data-state='error'] {
+  background: var(--dsw-alias-state-error-primary);
+}
+
+.toolDot[data-state='running'] {
+  animation: 1s ease-in-out infinite alternate tool-dot-pulse;
+}
+
+@keyframes tool-dot-pulse {
+  0% { opacity: .35 }
+  to { opacity: 1 }
+}
+
+.toolName {
+  font-family: var(--ds-font-family-code);
+  font-size: 13px;
+  color: var(--dsw-alias-label-primary);
+  word-break: break-all;
+}
+
+.toolState {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+}
+
+.toolDur {
+  margin-left: auto;
+  color: var(--dsw-alias-label-caption);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+
+.toolDetail {
+  border-top: 1px solid var(--dsw-alias-border-l1);
+  color: var(--dsw-alias-label-secondary);
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: var(--ds-font-family-code);
+  font-size: 12px;
+  line-height: 19px;
+  padding: 8px 12px;
+}
+
+/* resolved approval inline line */
+.approvalDone {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12.5px;
+  border-left: 3px solid var(--dsw-alias-border-l3);
+  padding: 2px 8px;
+  word-break: break-all;
+}
+
+.approvalDone b {
+  font-weight: 500;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.approvalDone[data-outcome='allowed-once'],
+.approvalDone[data-outcome='allowed'] {
+  border-left-color: var(--dsw-alias-state-success-primary);
+}
+
+.approvalDone[data-outcome='rejected'],
+.approvalDone[data-outcome='denied'] {
+  border-left-color: var(--dsw-alias-state-error-primary);
+}
+
+/* error line */
+.errorLine {
+  color: var(--dsw-alias-state-error-primary);
+  font-size: 12.5px;
+  line-height: 19px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

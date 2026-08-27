@@ -37,7 +37,27 @@ async function main() {
   check('health ok+version', health.status === 200 && health.json?.ok === true && typeof health.json?.version === 'string', health.json)
   const page = await call(handler, 'GET', '/smart-chat/')
   check('page html served', page.status === 200 && page.text.includes('smart-chat') && page.text.includes('<!doctype html>'), page.status)
-  check('page self-contained size', Buffer.byteLength(page.text) < 50 * 1024, Buffer.byteLength(page.text))
+
+  console.log('# built React shell: prefix injection + assets')
+  // The shell probe is async; wait until the route serves the built bundle
+  // (source checkouts without a build keep the legacy single-file page).
+  const shell = await waitFor(async () => {
+    const res = await call(handler, 'GET', '/smart-chat/')
+    return res.text.includes('window.__SMART_CHAT_PREFIX__ = "/smart-chat"') ? res : undefined
+  }, { what: 'built shell served' })
+  check('shell prefix injected', shell.text.includes('window.__SMART_CHAT_PREFIX__ = "/smart-chat"'))
+  check('property name not corrupted', shell.text.includes('window.__SMART_CHAT_PREFIX__'), shell.text.slice(0, 300))
+  const assetMatch = /(?:src|href)="\.\/(assets\/[^"]+)"/.exec(shell.text)
+  check('shell references hashed assets', assetMatch !== null, shell.text.slice(0, 200))
+  if (assetMatch !== null) {
+    const asset = await call(handler, 'GET', `/smart-chat/${assetMatch[1]}`)
+    check('asset served', asset.status === 200 && asset.res.chunks.length > 0, asset.status)
+    check('asset cache header', String(asset.headers['cache-control'] ?? '').includes('immutable'), asset.headers)
+  }
+  const traversal = await call(handler, 'GET', '/smart-chat/assets/../bridge.js')
+  check('asset traversal blocked', traversal.status === 403 || traversal.status === 404, traversal.status)
+  const missing = await call(handler, 'GET', '/smart-chat/assets/nope-123.js')
+  check('missing asset 404', missing.status === 404, missing.status)
 
   console.log('# MCP engine drives the tool surface')
   await waitFor(() => app.get('tools')?.schemas(undefined).some((s) => s.name === 'mcp__echo__echo'), { what: 'echo tool' })

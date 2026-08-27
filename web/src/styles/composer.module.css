@@ -1,0 +1,163 @@
+/* Composer — mirrors the harness InputBar card geometry:
+ * 22px radius, 1px border-l2-darkmode-thin, input-major background,
+ * shadow lv2, 12px inner gap, 10px top padding, 16px/24px text,
+ * textarea padded 4px 12px 0 16px with a 216px max-height scroll,
+ * tool row `2px 8px 6px`, 34px round send button, 28px round add button. */
+
+.root {
+  padding: 0 var(--dsh-composer-side-clearance) 8px;
+  flex-direction: column;
+  align-items: center;
+  display: flex;
+}
+
+.card {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: var(--dsh-composer-card-max-width);
+  border: 1px solid var(--dsw-alias-border-l2-darkmode-thin);
+  background: var(--dsw-specific-input-major);
+  box-shadow: var(--dsw-shadow-lv2);
+  border-radius: 22px;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 10px;
+  font-size: 16px;
+  line-height: 24px;
+  display: flex;
+  position: relative;
+  transition: border-color var(--ds-transition-duration-fast) var(--ds-ease-in-out);
+}
+
+.card:focus-within {
+  border-color: var(--dsw-alias-border-l3);
+}
+
+.scroll {
+  max-height: var(--dsh-composer-text-max-height);
+  overflow-y: auto;
+  min-height: 28px;
+}
+
+.textarea {
+  resize: none;
+  width: 100%;
+  color: var(--dsw-alias-label-primary);
+  caret-color: var(--dsw-alias-state-business-primary);
+  background: 0 0;
+  border: none;
+  outline: none;
+  font: inherit;
+  line-height: inherit;
+  display: block;
+  padding: 4px 12px 0 16px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.textarea::placeholder {
+  color: var(--dsw-alias-label-caption);
+  user-select: none;
+}
+
+.textarea:disabled {
+  cursor: not-allowed;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.row {
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 2px 8px 6px;
+  display: flex;
+}
+
+.tools,
+.trailing {
+  align-items: center;
+  min-width: 0;
+  display: flex;
+}
+
+.tools {
+  gap: 16px;
+}
+
+.trailing {
+  flex: none;
+  gap: 12px;
+  margin-left: auto;
+}
+
+.add {
+  background: var(--dsw-specific-selector);
+  width: 28px;
+  height: 28px;
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+  border: none;
+  border-radius: 999px;
+  flex: none;
+  place-items: center;
+  display: grid;
+  transition: background-color var(--ds-transition-duration-fast) var(--ds-ease-in-out);
+}
+
+.add:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover-solid);
+}
+
+.add:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.pending {
+  background: var(--dsw-alias-state-business-primary);
+  border-radius: 50%;
+  width: 8px;
+  height: 8px;
+  animation: 1s ease-in-out infinite alternate composer-pending;
+}
+
+@keyframes composer-pending {
+  0% { opacity: .35 }
+  to { opacity: 1 }
+}
+
+.primary {
+  background: var(--dsw-alias-button-info-fill);
+  color: #fff;
+  cursor: pointer;
+  border: none;
+  border-radius: 999px;
+  flex: none;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  transition: background-color var(--ds-transition-duration-fast) var(--ds-ease-in-out);
+  display: grid;
+  transform: translateY(-2px);
+}
+
+.primary:hover:not(:disabled) {
+  background: var(--dsw-alias-button-info-hover);
+}
+
+.primary:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.hint {
+  color: var(--dsw-alias-label-caption);
+  font-size: 12px;
+  line-height: 18px;
+  margin: 6px calc(var(--dsh-composer-side-clearance) + 8px) 0;
+  max-width: var(--dsh-composer-card-max-width);
+  align-self: center;
+}
