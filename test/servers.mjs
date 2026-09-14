@@ -241,75 +241,57 @@ async function main() {
     }
   }
 
-  console.log('# engine: username/password login issues a session the bridge mounts with')
+  console.log('# engine: username/password passthrough stores credentials and the probe confirms')
   {
     const authServer = await authHttpMcpServer('demo-mcp-token')
     try {
       const { app, handler } = await buildApp(MemorySettings, [
-        { serverName: 'authy', transport: 'streamable-http', url: authServer.url, auth: { loginUrl: authServer.loginUrl } },
+        { serverName: 'authy', transport: 'streamable-http', url: authServer.url, auth: { probeTool: 'echo' } },
       ])
       const rowOf = async (name) => {
         const r = await call(handler, 'GET', '/smart-chat/servers.json')
         return r.json?.servers?.find((s) => s.serverName === name)
       }
-      await waitFor(async () => {
-        const row = await rowOf('authy')
-        return row?.auth?.required === true ? row : undefined
-      }, { what: 'authy flagged before login' })
 
-      // Input-time gate: while credentials are missing, messages are held
-      // with 409 credentials-required instead of running into 401s.
+      // Connection-level auth mode: the server mounts only WITH credentials.
+      // Store them first (pure passthrough, nothing to validate up front),
+      // then the mount succeeds through the X-Platform-* headers.
+      const store = await call(handler, 'POST', '/smart-chat/servers/authy/credentials', JSON.stringify({ username: 'demo-user', password: 'demo-password' }))
+      check('credentials stored (passthrough)', store.status === 200, store)
+      await waitFor(() => app.get('tools').schemas(undefined).some((s) => s.name === 'mcp__authy__echo'), { what: 'authy mounted with credentials' })
+
+      // Input-time gate: the silent probe runs on the first message and
+      // gets the credential rejection → 409, dialog, no bridge login.
       const created = await call(handler, 'POST', '/smart-chat/sessions', '{}')
       const sid = created.json.sessionId
       const held = await call(handler, 'POST', '/smart-chat/messages', JSON.stringify({ sessionId: sid, text: 'list alarms' }))
-      check('message held 409 while unauthenticated', held.status === 409 && held.json?.code === 'credentials-required' && held.json?.servers?.[0] === 'authy', held.json)
+      check('message flows once the probe passes', held.status === 202, held.status)
 
-      // Wrong credentials are rejected by the login endpoint; the gate stays.
+      // Wrong password in CONNECTION mode fails the mount itself (the
+      // headers are rejected at initialize); the server drops to
+      // connecting/failed and the message gate stays.
       const bad = await call(handler, 'POST', '/smart-chat/servers/authy/credentials', JSON.stringify({ username: 'demo-user', password: 'wrong' }))
-      check('wrong password rejected 400', bad.status === 400 && String(bad.json?.error).length > 0, bad)
-      const stillHeld = await call(handler, 'POST', '/smart-chat/messages', JSON.stringify({ sessionId: sid, text: 'list alarms' }))
-      check('message still held after failed login', stillHeld.status === 409, stillHeld.status)
+      check('wrong password stored (passthrough defers judgement)', bad.status === 200, bad)
+      await new Promise((resolve) => setTimeout(resolve, 800))
+      const gatedAfterBad = await call(handler, 'POST', '/smart-chat/messages', JSON.stringify({ sessionId: sid, text: 'list alarms' }))
+      check('message gated while wrong credentials cannot mount', gatedAfterBad.status === 409, gatedAfterBad.status)
 
-      // Correct credentials: the bridge logs in (Set-Cookie style), remounts
-      // with Bearer + Cookie dual form, and the gate opens — the held
-      // message can now flow.
+      // Correct credentials: remounted with X-Platform-* passthrough
+      // headers, the mount succeeds and the gate opens.
       const good = await call(handler, 'POST', '/smart-chat/servers/authy/credentials', JSON.stringify({ username: 'demo-user', password: 'demo-password' }))
-      check('login accepted 200', good.status === 200, good)
-      check('login performed', authServer.state.logins >= 1, authServer.state.logins)
+      check('credentials accepted 200', good.status === 200, good)
+      await waitFor(() => app.get('tools').schemas(undefined).some((s) => s.name === 'mcp__authy__echo'), { what: 'authy remounted with correct credentials' })
       const released = await call(handler, 'POST', '/smart-chat/messages', JSON.stringify({ sessionId: sid, text: 'list alarms' }))
-      check('message flows after login', released.status === 202, released.status)
-      await waitFor(() => app.get('tools').schemas(undefined).some((s) => s.name === 'mcp__authy__echo'), { what: 'authy tools after login' })
+      check('message flows after credentials', released.status === 202, released.status)
       const ok = await rowOf('authy')
-      check('connected after login', ok?.state === 'connected' && ok?.toolCount === 1, ok)
+      check('connected after credentials', ok?.state === 'connected' && ok?.toolCount === 1, ok)
       check('auth cleared with kind password', ok?.auth?.required === false && ok?.auth?.has === 'password', ok?.auth)
 
-      console.log('# engine: expired session auto re-logs-in without prompting')
-      // Kill the session server-side; the next tool call fails 401, the
-      // watchdog re-logs-in quietly and remounts.
-      await fetch(authServer.logoutUrl, { method: 'POST' })
-      const session = app.get('sessions').create('session-relogin')
-      session.append('turn/start', { turn: 1 })
-      session.append('tool/call', { turn: 1, step: 1, callId: 'c3', name: 'mcp__authy__echo', arguments: '{}' })
-      session.append('tool/result', {
-        turn: 1,
-        step: 1,
-        message: {
-          role: 'user',
-          content: [{ type: 'tool-result', toolCallId: 'c3', isError: true, content: [{ type: 'text', text: 'Error POSTing to endpoint: 401 Unauthorized' }] }],
-          source: { kind: 'tool', callId: 'c3' },
-        },
-      }, { surfaceOp: 'append' })
-      const loginsBefore = authServer.state.logins
-      await waitFor(() => authServer.state.logins >= loginsBefore + 1, { what: 'auto re-login' })
-      await waitFor(() => app.get('tools').schemas(undefined).some((s) => s.name === 'mcp__authy__echo'), { what: 'tools back after re-login' })
-      const after = await rowOf('authy')
-      check('still connected after re-login', after?.state === 'connected', after)
-      check('no credential prompt raised', after?.auth?.required !== true, after?.auth)
-
-      console.log('# engine: a failing re-login (rotated password) DOES prompt and gate')
-      // Rotate the server-side password: the stored credentials can no
-      // longer refresh, so the bridge flags the server (this credential is
-      // OURS) and gates messages until the user re-enters them.
+      console.log('# engine: a rotated password re-flags via the tool call and gates until renewed')
+      // The server-side account changes: the MCP server's own login now
+      // fails, its tool call surfaces the per-call credential error, the
+      // watchdog flags (this credential is OURS) and gates messages until
+      // the user re-enters them.
       authServer.setPassword('demo-rotated-password')
       const session2 = app.get('sessions').create('session-rotated')
       session2.append('turn/start', { turn: 1 })
@@ -319,40 +301,22 @@ async function main() {
         step: 1,
         message: {
           role: 'user',
-          content: [{ type: 'tool-result', toolCallId: 'c4', isError: true, content: [{ type: 'text', text: 'Error POSTing to endpoint: 401 Unauthorized' }] }],
+          content: [{ type: 'tool-result', toolCallId: 'c4', isError: true, content: [{ type: 'text', text: 'Error: 本次调用未提供平台凭证：请经请求头传入（X-Platform-Token，或 X-Platform-Username/X-Platform-Password，或 Authorization: Basic），或启动时配置静态凭证' }] }],
           source: { kind: 'tool', callId: 'c4' },
         },
       }, { surfaceOp: 'append' })
       const flagged = await waitFor(async () => {
         const row = await rowOf('authy')
         return row?.auth?.required === true ? row : undefined
-      }, { what: 'flagged after failed re-login' })
-      check('failed re-login flags auth.required', flagged?.auth?.required === true, flagged?.auth)
+      }, { what: 'flagged after the account rotation' })
+      check('rotation flags auth.required', flagged?.auth?.required === true, flagged?.auth)
       const gated2 = await call(handler, 'POST', '/smart-chat/messages', JSON.stringify({ sessionId: sid, text: 'again' }))
-      check('messages gated while re-login fails', gated2.status === 409, gated2.status)
+      check('messages gated while credentials are wrong', gated2.status === 409, gated2.status)
       const renewed = await call(handler, 'POST', '/smart-chat/servers/authy/credentials', JSON.stringify({ username: 'demo-user', password: 'demo-rotated-password' }))
       check('re-entered credentials accepted', renewed.status === 200, renewed)
       const ungated = await call(handler, 'POST', '/smart-chat/messages', JSON.stringify({ sessionId: sid, text: 'again' }))
       check('messages flow after renewal', ungated.status === 202, ungated.status)
 
-      await app.fiber.dispose()
-    } finally {
-      await authServer.close()
-    }
-  }
-
-  console.log('# engine: legacy body-token login style also works')
-  {
-    const authServer = await authHttpMcpServer('demo-mcp-token', { loginStyle: 'body' })
-    try {
-      const { app, handler } = await buildApp(MemorySettings, [
-        { serverName: 'authy', transport: 'streamable-http', url: authServer.url, auth: { loginUrl: authServer.loginUrl } },
-      ])
-      const good = await call(handler, 'POST', '/smart-chat/servers/authy/credentials', JSON.stringify({ username: 'demo-user', password: 'demo-password' }))
-      check('legacy login accepted', good.status === 200, good)
-      await waitFor(() => app.get('tools').schemas(undefined).some((s) => s.name === 'mcp__authy__echo'), { what: 'legacy-style tools' })
-      const r = await call(handler, 'GET', '/smart-chat/servers.json')
-      check('legacy style connected', r.json?.servers?.[0]?.state === 'connected', r.json?.servers?.[0])
       await app.fiber.dispose()
     } finally {
       await authServer.close()

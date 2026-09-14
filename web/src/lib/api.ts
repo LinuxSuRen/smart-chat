@@ -67,7 +67,6 @@ export interface ServerCredential {
   token?: string
   username?: string
   password?: string
-  loginUrl?: string
 }
 
 function loadCredMap(): Record<string, ServerCredential> {

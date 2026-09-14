@@ -89,28 +89,26 @@ a message and a mounted server still has no credentials **for the hop smart-chat
 
 - The MCP **endpoint** rejects the connection with 401 (e.g. robot-platform-mcp deployed with
   `-mcp-token`/`MCP_SERVER_TOKEN` admission) → flag + dialog; paste that admission token.
-- A bridge-stored **username+password** can no longer refresh (login endpoint rejects it) →
-  auto re-login first; the dialog appears only when the re-login itself fails.
+- A bridge-stored **username+password** turned out to be wrong (the server's own login rejects
+  it and the tool call says so) → prompt again.
 - A 401/403 coming from the system **behind** an already-connected MCP server (its own
   platform credentials — robot-platform-mcp's `-username`/`-password` — or per-API
   permissions) is **the server's credential domain**: it surfaces as a normal tool error,
   never prompts, never gates messages. Fix those on the MCP server's own arguments/env.
 
-Credential modes (robot-platform compatible; stored **in host memory only** — the settings
-layer never sees a credential, and remounting merges them into the transport headers):
+Credential modes (**pure passthrough** — smart-chat never logs in itself; stored **in host
+memory only**, the settings layer never sees a credential):
 
-- **token** — pasted bearer token, sent as `Authorization: Bearer`;
-- **username + password** — the bridge performs the login itself: `POST {loginUrl}` with JSON
-  `{username, password}`; on 200 the session JWT is taken from `Set-Cookie: auth_token=...`
-  first, falling back to the response body's `token` field; the JWT is then carried in BOTH
-  forms (`Authorization: Bearer` + `Cookie: auth_token=`), matching deployments where only one
-  of the two middlewares is active. On later 401/403s the bridge re-logs-in automatically.
+- **token** — sent as `X-Platform-Token` + `Authorization: Bearer`;
+- **username + password** — sent as `X-Platform-Username` / `X-Platform-Password`; the MCP
+  server receives them at initialize and runs its OWN authentication/JWT lifecycle.
+  There is **no login URL**: correctness is confirmed the only reliable way — by executing
+  a tool (`auth.probeTool`, or the model's own calls).
 
-The `loginUrl` defaults to the entry's `auth.loginUrl` (optional field on streamable-http
-entries, see below) and otherwise to `<origin of url>/api/v1/auth/login`. Everything is lost
-on dsh restart (by design); the page caches credentials in `localStorage` purely to re-submit
-them silently for you. A stale streamable-http session (`session not found`) is healed
-separately: the watchdog remounts the fiber automatically, no credentials involved.
+Everything is lost on dsh restart (by design); the page caches credentials in `localStorage`
+purely to re-submit them silently for you. A stale streamable-http session
+(`session not found`) is healed separately: the watchdog remounts the fiber automatically, no
+credentials involved.
 
 When the MCP server restarts **mid-conversation**, the in-flight tool call still fails once
 (nothing can revive a request that hit a dead session). Right after the remount completes and
@@ -128,9 +126,7 @@ read-only probe tool configured, the bridge silently executes it ONCE per creden
 generation right when the user's first message arrives: static server credentials or working
 stored credentials → the message flows with zero prompts; missing credentials → the message
 is held (409), the login dialog opens, and after login the held message re-probes and
-continues automatically. Stored credentials are merged in BOTH vocabularies
-(`Authorization: Bearer` / `Cookie: auth_token` + `X-Platform-*`), so admission and
-no-admission deployments both work. Mid-conversation, a tool result that explicitly asks the
+continues automatically. Mid-conversation, a tool result that explicitly asks the
 caller for per-request credentials ("请经请求头传入…") re-opens the same flow.
 
 ## Configuration
@@ -145,7 +141,6 @@ servers:
     url: https://mcp.example.com/mcp
     headers: { X-Extra: demo }      # static headers (credentials belong in the dialog, not here)
     auth:
-      loginUrl: https://api.example.com/api/v1/auth/login   # optional; default <origin>/api/v1/auth/login
       probeTool: system_dashboard_stats   # optional read-only tool for the silent credential probe
   - serverName: demo-stdio
     transport: stdio

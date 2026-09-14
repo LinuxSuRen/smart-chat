@@ -69,12 +69,9 @@ export function App() {
         const held = pendingAuthMessageRef.current
         if (held !== null) {
           pendingAuthMessageRef.current = null
-          pushSys(`logged in — continuing: ${held.length > 60 ? held.slice(0, 60) + '…' : held}`)
           lastSentRef.current = { text: held, answered: false }
           const retry = await doSubmit(held)
           if (retry.status !== 202) pushSys(`continue failed: ${retry.data?.error ?? retry.status}`)
-        } else {
-          pushSys(`logged in to ${serverName} — you can retry the request`)
         }
         return
       }
@@ -86,7 +83,7 @@ export function App() {
       }
       pushSys(`credential submit failed for ${serverName}: ${err instanceof Error ? err.message : String(err)}`)
     }
-    if (manual) setServerAuth({ serverName, reason: 'retry — the previous credentials were rejected' })
+    if (manual) setServerAuth({ serverName, reason: '' })
   }, [doSubmit])
   const pollServersRef = useRef<(() => void) | null>(null)
 
@@ -232,14 +229,11 @@ export function App() {
       const res = await doSubmit(text)
       if (res.status === 409 && res.data?.code === 'credentials-required') {
         // Input-time gate: the bridge held the message because a mounted
-        // server has no credentials yet. Show the login dialog; the message
-        // continues automatically once the login succeeds.
+        // server has no credentials yet. Show the (clean) login dialog; the
+        // message continues automatically once the login succeeds.
         pendingAuthMessageRef.current = text
         const servers = res.data.servers ?? []
-        setServerAuth({
-          serverName: servers[0] ?? 'MCP server',
-          reason: `${res.data.error ?? 'login required'} — your message continues automatically after login.`,
-        })
+        setServerAuth({ serverName: servers[0] ?? 'MCP server', reason: '' })
         return
       }
       if (res.status !== 202) pushSys(`message rejected: ${res.data?.error ?? res.status}`)
@@ -330,8 +324,8 @@ export function App() {
       )}
       {serverAuth && !needToken && (
         <TokenModal
-          title={`Credentials required: ${serverAuth.serverName}`}
-          hint={`${serverAuth.reason ?? 'This MCP server rejected the request as unauthorized (401/403).'} Credentials are kept in the bridge memory only — never in the server config. With username + password the bridge logs in itself and refreshes the session automatically.`}
+          title={`Login: ${serverAuth.serverName}`}
+          hint={serverAuth.reason === '' ? '' : serverAuth.reason}
           allowPassword
           onSaved={(cred, remember) => {
             saveMcpCredential(serverAuth.serverName, cred, remember)

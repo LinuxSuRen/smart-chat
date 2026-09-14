@@ -4,11 +4,11 @@ import styles from '../styles/layout.module.css'
 
 interface Props {
   title?: string
+  /** Shown only when non-empty; the dialog stays clean by default. */
   hint?: string
   /** Offer the username+password mode in addition to the plain token. */
   allowPassword?: boolean
   defaultMode?: 'token' | 'password'
-  defaultLoginUrl?: string
   /** Receives the credential and the remember choice; the caller decides what it authorizes. */
   onSaved: (cred: ServerCredential, remember: boolean) => void
   onCancel?: () => void
@@ -16,29 +16,22 @@ interface Props {
 
 /**
  * Credential prompt: the bridge's own token (401) or a target MCP server's
- * credentials — token passthrough, or username+password for a bridge-side
- * robot-platform style JWT login (the bridge logs in, carries the session as
- * Bearer + Cookie, and re-logs-in automatically when it expires).
+ * credentials — token, or username+password in PURE PASSTHROUGH (the MCP
+ * server authenticates itself; smart-chat confirms via a tool call).
  */
 export const TokenModal = memo(function TokenModal({
-  title, hint, allowPassword = false, defaultMode = 'token', defaultLoginUrl = '', onSaved, onCancel,
+  title, hint = '', allowPassword = false, defaultMode = 'token', onSaved, onCancel,
 }: Props) {
   const [mode, setMode] = useState<'token' | 'password'>(allowPassword ? defaultMode : 'token')
   const [value, setValue] = useState('')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
-  const [loginUrl, setLoginUrl] = useState(defaultLoginUrl)
   const [remember, setRemember] = useState(true)
 
   const save = () => {
     if (mode === 'password') {
       if (username.trim() === '' || password === '') return
-      onSaved({
-        kind: 'password',
-        username: username.trim(),
-        password,
-        ...(loginUrl.trim() !== '' ? { loginUrl: loginUrl.trim() } : {}),
-      }, remember)
+      onSaved({ kind: 'password', username: username.trim(), password }, remember)
     } else {
       onSaved({ kind: 'token', token: value.trim() }, remember)
     }
@@ -48,9 +41,7 @@ export const TokenModal = memo(function TokenModal({
     <div className={styles.modalMask} role="dialog" aria-modal="true" aria-label={title ?? 'access token'}>
       <div className={styles.modalCard}>
         <h2>{title ?? 'Access token required'}</h2>
-        <p className={styles.modalHint}>
-          {hint ?? 'This bridge is protected. Paste the token from the bridge config.'}
-        </p>
+        {hint !== '' && <p className={styles.modalHint}>{hint}</p>}
         {allowPassword && (
           <div className={styles.credMode}>
             <label>
@@ -94,13 +85,6 @@ export const TokenModal = memo(function TokenModal({
               onKeyDown={(ev) => {
                 if (ev.key === 'Enter') save()
               }}
-            />
-            <input
-              type="text"
-              placeholder="login URL (optional)"
-              autoComplete="off"
-              value={loginUrl}
-              onChange={(ev) => setLoginUrl(ev.target.value)}
             />
           </div>
         )}

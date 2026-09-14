@@ -263,18 +263,24 @@ async function main() {
       const authServer = await authHttpMcpServer('demo-mcp-token')
       try {
         const add = await call(handler, 'POST', '/smart-chat/servers', JSON.stringify({
-          servers: [...await lastEntries(handler), { serverName: 'authy', transport: 'streamable-http', url: authServer.url, auth: { loginUrl: authServer.loginUrl } }],
+          servers: [...await lastEntries(handler), { serverName: 'authy', transport: 'streamable-http', url: authServer.url, auth: { probeTool: 'echo' } }],
         }))
         check('authy added', add.status === 200, add)
+        // Store the (initially correct) passthrough credentials and let the
+        // probe confirm them.
         const login = await call(handler, 'POST', '/smart-chat/servers/authy/credentials', JSON.stringify({ username: 'demo-user', password: 'demo-password' }))
-        check('authy logged in', login.status === 200, login)
-        await waitFor(() => app.get('tools').schemas(undefined).some((s) => s.name === 'mcp__authy__echo'), { what: 'authy tools' })
+        check('authy credentials stored', login.status === 200, login)
+        const probeSession = (await call(handler, 'POST', '/smart-chat/sessions', '{}')).json.sessionId
+        const probeMsg = await call(handler, 'POST', '/smart-chat/messages', JSON.stringify({ sessionId: probeSession, text: 'warm' }))
+        check('probe confirmed via tool call', probeMsg.status === 202, probeMsg.status)
 
         const created = await call(handler, 'POST', '/smart-chat/sessions', '{}')
         const sessionId = created.json.sessionId
         const sse = openSse(handler, `/smart-chat/events?sessionId=${encodeURIComponent(sessionId)}`)
         await waitFor(() => sse.frames().some((f) => f.event === 'ready'), { what: 'ready' })
 
+        // Rotate the server-side password: the MCP server's own login now
+        // fails and its tool call asks the caller for credentials.
         authServer.setPassword('demo-rotated-password')
         const session = app.get('sessions').create('session-cred')
         session.append('turn/start', { turn: 1 })
@@ -284,7 +290,7 @@ async function main() {
           step: 1,
           message: {
             role: 'user',
-            content: [{ type: 'tool-result', toolCallId: 'c9', isError: true, content: [{ type: 'text', text: 'Error POSTing to endpoint: 401 Unauthorized' }] }],
+            content: [{ type: 'tool-result', toolCallId: 'c9', isError: true, content: [{ type: 'text', text: 'Error: 本次调用未提供平台凭证：请经请求头传入（X-Platform-Token，或 X-Platform-Username/X-Platform-Password，或 Authorization: Basic），或启动时配置静态凭证' }] }],
             source: { kind: 'tool', callId: 'c9' },
           },
         }, { surfaceOp: 'append' })
@@ -292,7 +298,7 @@ async function main() {
         await new Promise((resolve) => setTimeout(resolve, 500))
         check('no frame for the server-own-domain 401', !sse.frames().some((f) => f.event === 'credential_required' && f.data?.serverName === 'echo2'))
         const frame = await waitFor(() => sse.frames().find((f) => f.event === 'credential_required' && f.data?.serverName === 'authy'), { what: 'credential_required frame for authy' })
-        check('frame carries the failed re-login reason', String(frame.data?.reason).includes('re-login failed'), frame.data)
+        check('frame asks for platform credentials', String(frame.data?.reason).includes('platform credentials'), frame.data)
         const tokenRoute = await call(handler, 'POST', `/smart-chat/servers/echo2/token`, '{"token":"x"}')
         check('stdio server token rejected 400', tokenRoute.status === 400, tokenRoute.status)
         sse.req.emit('close')
