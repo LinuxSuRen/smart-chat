@@ -119,6 +119,20 @@ server restarted, the session was rebuilt, the failed call was never executed; r
 the model retries with the fresh session and the chat continues on its own. The page also
 receives a `session-rebuilt` informational frame.
 
+**Silent probe at the first message** (`auth.probeTool` on the entry): the MCP connection
+itself never touches the platform (initialize and tools/list are server-local), so a server
+that expects per-request platform credentials (robot-platform style: `X-Platform-Token`,
+`X-Platform-Username/X-Platform-Password`, session-pinned at initialize) mounts as
+"connected" while its tool calls would fail with "本次调用未提供平台凭证". With a cheap
+read-only probe tool configured, the bridge silently executes it ONCE per credential
+generation right when the user's first message arrives: static server credentials or working
+stored credentials → the message flows with zero prompts; missing credentials → the message
+is held (409), the login dialog opens, and after login the held message re-probes and
+continues automatically. Stored credentials are merged in BOTH vocabularies
+(`Authorization: Bearer` / `Cookie: auth_token` + `X-Platform-*`), so admission and
+no-admission deployments both work. Mid-conversation, a tool result that explicitly asks the
+caller for per-request credentials ("请经请求头传入…") re-opens the same flow.
+
 ## Configuration
 
 `servers` — composition/base layer of the effective MCP server list (the page edits the dsh
@@ -132,6 +146,7 @@ servers:
     headers: { X-Extra: demo }      # static headers (credentials belong in the dialog, not here)
     auth:
       loginUrl: https://api.example.com/api/v1/auth/login   # optional; default <origin>/api/v1/auth/login
+      probeTool: system_dashboard_stats   # optional read-only tool for the silent credential probe
   - serverName: demo-stdio
     transport: stdio
     command: /usr/local/bin/demo-mcp-server

@@ -69,11 +69,17 @@ export function zombieEntry(serverName = 'zombie') {
  */
 export async function authHttpMcpServer(expectedToken = 'demo-mcp-token', opts = {}) {
   const loginStyle = opts.loginStyle ?? 'cookie'
+  // perCallCreds: the MCP connection (initialize/tools/list) is OPEN; only
+  // tools/call requires per-request platform credentials (robot-platform
+  // style: X-Platform-Token, X-Platform-Username/Password, or Authorization).
+  // staticCreds: the server itself carries credentials; calls never reject.
+  const perCallCreds = opts.perCallCreds === true
+  const staticCreds = opts.staticCreds === true
   const username = opts.username ?? 'demo-user'
   let password = opts.password ?? 'demo-password'
   const jwtPrefix = opts.jwtPrefix ?? 'demo-jwt-'
   let jwtCounter = 0
-  const state = { logins: 0, issuedJwts: [], sessionValid: true }
+  const state = { logins: 0, issuedJwts: [], sessionValid: true, credRejectedCalls: 0 }
   const { createServer } = await import('node:http')
   const calls = { total: 0, rejected: 0 }
   const isAuthorized = (req) => {
@@ -81,10 +87,16 @@ export async function authHttpMcpServer(expectedToken = 'demo-mcp-token', opts =
     if (req.headers.authorization === `Bearer ${expectedToken}`) return true
     const auth = req.headers.authorization ?? ''
     const cookie = req.headers.cookie ?? ''
+    const xToken = String(req.headers['x-platform-token'] ?? '')
+    const xUser = String(req.headers['x-platform-username'] ?? '')
+    const xPass = String(req.headers['x-platform-password'] ?? '')
+    if (xToken === expectedToken) return true
+    if (xUser === username && xPass === password) return true
     if (auth.startsWith('Bearer ') && auth.slice(7).startsWith(jwtPrefix)) return true
     if (cookie.includes(`auth_token=${jwtPrefix}`)) return true
     return false
   }
+  const NO_PLATFORM_CREDS = 'Error: 本次调用未提供平台凭证：请经请求头传入（X-Platform-Token，或 X-Platform-Username/X-Platform-Password，或 Authorization: Basic），或启动时配置静态凭证'
   const server = createServer((req, res) => {
     const chunks = []
     req.on('data', (c) => chunks.push(c))
@@ -117,6 +129,44 @@ export async function authHttpMcpServer(expectedToken = 'demo-mcp-token', opts =
       }
 
       if (req.method !== 'POST') return reply(405, { error: 'POST only' })
+      if (perCallCreds && message?.method === 'tools/call') {
+        // Connection-level auth does not apply; only the call needs creds.
+        if (!staticCreds && !isAuthorized(req)) {
+          state.credRejectedCalls += 1
+          return reply(200, {
+            jsonrpc: '2.0',
+            id: message.id,
+            result: { content: [{ type: 'text', text: NO_PLATFORM_CREDS }], isError: true },
+          })
+        }
+        return reply(200, {
+          jsonrpc: '2.0',
+          id: message.id,
+          result: { content: [{ type: 'text', text: 'echo: ' + (message.params?.arguments?.text ?? 'probed') }] },
+        })
+      }
+      if (perCallCreds) {
+        // initialize / tools/list stay open in per-call mode.
+        if (message?.method === 'initialize') {
+          return reply(200, {
+            jsonrpc: '2.0',
+            id: message.id,
+            result: {
+              protocolVersion: message.params?.protocolVersion ?? '2024-11-05',
+              capabilities: { tools: {} },
+              serverInfo: { name: 'authy', version: '1.0.0' },
+            },
+          })
+        }
+        if (message?.method === 'tools/list') {
+          return reply(200, {
+            jsonrpc: '2.0',
+            id: message.id,
+            result: { tools: [{ name: 'echo', description: 'authed echo', inputSchema: { type: 'object', properties: { text: { type: 'string' } } } }] },
+          })
+        }
+        return reply(200, { jsonrpc: '2.0', id: message?.id ?? null, result: {} })
+      }
       if (!isAuthorized(req)) {
         calls.rejected += 1
         return reply(401, {

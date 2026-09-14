@@ -359,6 +359,67 @@ async function main() {
     }
   }
 
+  console.log('# engine: silent probe gates the FIRST message on missing platform credentials')
+  {
+    // Per-call-credential server: the MCP connection is open (state shows
+    // connected), but tool calls fail with the "no platform credentials"
+    // text — exactly the robot-platform deployment without static creds.
+    const authServer = await authHttpMcpServer('demo-mcp-token', { perCallCreds: true })
+    try {
+      const { app, handler } = await buildApp(MemorySettings, [
+        { serverName: 'authy', transport: 'streamable-http', url: authServer.url, auth: { probeTool: 'echo' } },
+      ])
+      // The connection succeeds and tools register — auth stays invisible.
+      await waitFor(() => app.get('tools').schemas(undefined).some((s) => s.name === 'mcp__authy__echo'), { what: 'authy tools' })
+      const idle = await call(handler, 'GET', '/smart-chat/servers.json')
+      check('connected with no visible auth need', idle.json?.servers?.[0]?.state === 'connected' && idle.json?.servers?.[0]?.auth?.required === false, idle.json?.servers?.[0])
+
+      // First message: the silent probe runs, gets the credential error,
+      // and the message is held for the login dialog.
+      const created = await call(handler, 'POST', '/smart-chat/sessions', '{}')
+      const sid = created.json.sessionId
+      const held = await call(handler, 'POST', '/smart-chat/messages', JSON.stringify({ sessionId: sid, text: '查询告警' }))
+      check('first message held by the silent probe', held.status === 409 && held.json?.code === 'credentials-required' && held.json?.servers?.[0] === 'authy', held.json)
+      check('probe call was rejected for credentials', authServer.state.credRejectedCalls >= 1, authServer.state)
+
+      // Supply a token: remount merges X-Platform-Token; the re-sent
+      // message re-probes and flows.
+      const login = await call(handler, 'POST', '/smart-chat/servers/authy/credentials', JSON.stringify({ token: 'demo-mcp-token' }))
+      check('token accepted', login.status === 200, login)
+      const released = await call(handler, 'POST', '/smart-chat/messages', JSON.stringify({ sessionId: sid, text: '查询告警' }))
+      check('re-sent message flows after login', released.status === 202, released.status)
+      const okRow = await call(handler, 'GET', '/smart-chat/servers.json')
+      check('probe passed after login', okRow.json?.servers?.[0]?.auth?.required === false, okRow.json?.servers?.[0]?.auth)
+
+      // Subsequent messages skip the probe (verified once per credential
+      // generation — no extra platform calls).
+      const credCallsBefore = authServer.state.credRejectedCalls
+      const second = await call(handler, 'POST', '/smart-chat/messages', JSON.stringify({ sessionId: sid, text: '再来一条' }))
+      check('second message flows without re-probe', second.status === 202, second.status)
+
+      await app.fiber.dispose()
+    } finally {
+      await authServer.close()
+    }
+  }
+
+  console.log('# engine: probe passes silently when the server carries static credentials')
+  {
+    const authServer = await authHttpMcpServer('demo-mcp-token', { perCallCreds: true, staticCreds: true })
+    try {
+      const { app, handler } = await buildApp(MemorySettings, [
+        { serverName: 'authy', transport: 'streamable-http', url: authServer.url, auth: { probeTool: 'echo' } },
+      ])
+      await waitFor(() => app.get('tools').schemas(undefined).some((s) => s.name === 'mcp__authy__echo'), { what: 'authy tools' })
+      const created = await call(handler, 'POST', '/smart-chat/sessions', '{}')
+      const first = await call(handler, 'POST', '/smart-chat/messages', JSON.stringify({ sessionId: created.json.sessionId, text: 'hi' }))
+      check('static credentials: first message flows, no dialog', first.status === 202, first.status)
+      await app.fiber.dispose()
+    } finally {
+      await authServer.close()
+    }
+  }
+
   finish('servers')
 }
 
