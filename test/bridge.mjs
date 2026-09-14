@@ -235,6 +235,31 @@ async function main() {
     await waitFor(() => !visible().includes('mcp__echo__echo'), { what: 'restriction dropped echo' })
     check('removed server tool disappears', !visible().includes('mcp__echo__echo'), visible())
 
+    console.log('# focus: 401 tool result broadcasts credential_required')
+    {
+      const created = await call(handler, 'POST', '/smart-chat/sessions', '{}')
+      const sessionId = created.json.sessionId
+      const sse = openSse(handler, `/smart-chat/events?sessionId=${encodeURIComponent(sessionId)}`)
+      await waitFor(() => sse.frames().some((f) => f.event === 'ready'), { what: 'ready' })
+      const session = app.get('sessions').create('session-cred')
+      session.append('turn/start', { turn: 1 })
+      session.append('tool/call', { turn: 1, step: 1, callId: 'c9', name: 'mcp__echo2__echo', arguments: '{}' })
+      session.append('tool/result', {
+        turn: 1,
+        step: 1,
+        message: {
+          role: 'user',
+          content: [{ type: 'tool-result', toolCallId: 'c9', isError: true, content: [{ type: 'text', text: 'Error POSTing to endpoint: 401 Unauthorized' }] }],
+          source: { kind: 'tool', callId: 'c9' },
+        },
+      }, { surfaceOp: 'append' })
+      const frame = await waitFor(() => sse.frames().find((f) => f.event === 'credential_required'), { what: 'credential_required frame' })
+      check('frame names the server', frame.data?.serverName === 'echo2' && typeof frame.data?.reason === 'string', frame.data)
+      const tokenRoute = await call(handler, 'POST', `/smart-chat/servers/${encodeURIComponent(frame.data.serverName)}/token`, '{"token":"x"}')
+      check('stdio server token rejected 400', tokenRoute.status === 400, tokenRoute.status)
+      sse.req.emit('close')
+    }
+
     await app.fiber.dispose()
   }
 

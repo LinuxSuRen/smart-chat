@@ -7,7 +7,7 @@ import Tools from '@deepseek-ai/dsh-tools'
 import SessionStore from '@deepseek-ai/dsh-session'
 import {
   MemorySettings, ReadOnlySettings, FakeWebServer, FakeSystemPrompt, FakeAgents,
-  echoEntry, zombieEntry, call, waitFor, waitForRoute, check, finish,
+  echoEntry, zombieEntry, authHttpMcpServer, call, waitFor, waitForRoute, check, finish,
 } from './helpers.mjs'
 
 async function buildApp(settings = MemorySettings, servers = []) {
@@ -132,6 +132,75 @@ async function main() {
     check('remount noted in diagnostics', (row?.logs ?? []).some((l) => l.includes('remounting')), row?.logs)
 
     await app.fiber.dispose()
+  }
+
+  console.log('# engine: 401 from MCP server surfaces a token prompt and setToken recovers')
+  {
+    const authServer = await authHttpMcpServer('demo-mcp-token')
+    try {
+      const { app, handler } = await buildApp(MemorySettings, [
+        { serverName: 'authy', transport: 'streamable-http', url: authServer.url },
+        echoEntry(),
+      ])
+      const rowOf = async (name) => {
+        const r = await call(handler, 'GET', '/smart-chat/servers.json')
+        return r.json?.servers?.find((s) => s.serverName === name)
+      }
+
+      // Without a token the connection is rejected with 401 (the supervisor
+      // retries with backoff in the background — the status must flag it).
+      const authRow = await waitFor(async () => {
+        const row = await rowOf('authy')
+        return row?.auth?.required === true ? row : undefined
+      }, { what: 'authy flagged as needing a token' })
+      check('status flags auth.required', authRow?.auth?.required === true, authRow)
+      check('no tools from the rejected server', authRow?.toolCount === 0, authRow)
+
+      // Route validation.
+      const unknown = await call(handler, 'POST', '/smart-chat/servers/nope/token', '{"token":"x"}')
+      check('unknown server token 404', unknown.status === 404, unknown.status)
+      const stdio = await call(handler, 'POST', '/smart-chat/servers/echo/token', '{"token":"x"}')
+      check('stdio token 400', stdio.status === 400, stdio.status)
+      const empty = await call(handler, 'POST', '/smart-chat/servers/authy/token', '{}')
+      check('missing token field treated as clear', empty.status === 200 || empty.status === 400, empty.status)
+
+      // Submitting the token remounts with merged credentials.
+      const set = await call(handler, 'POST', '/smart-chat/servers/authy/token', JSON.stringify({ token: 'demo-mcp-token' }))
+      check('token accepted', set.status === 200, set)
+      await waitFor(() => app.get('tools').schemas(undefined).some((s) => s.name === 'mcp__authy__echo'), { what: 'authy tools after token' })
+      const ok = await rowOf('authy')
+      check('server connected after token', ok?.state === 'connected' && ok?.toolCount === 1, ok)
+      check('auth.required cleared', ok?.auth?.required === false, ok?.auth)
+      check('server saw rejected attempts', authServer.calls.rejected >= 1, authServer.calls)
+
+      // The settings layer stays credential-free.
+      const docJson = JSON.stringify(app.get('settings').doc)
+      check('settings layer has no Authorization', docJson.includes('Authorization') === false, docJson)
+
+      // Tool-call-time 403 (connection fine, call rejected) flips the flag
+      // without remounting; the SSE broadcast side is covered in bridge.mjs.
+      const session = app.get('sessions').create('session-auth-watchdog')
+      session.append('turn/start', { turn: 1 })
+      session.append('tool/call', { turn: 1, step: 1, callId: 'c2', name: 'mcp__authy__echo', arguments: '{}' })
+      session.append('tool/result', {
+        turn: 1,
+        step: 1,
+        message: {
+          role: 'user',
+          content: [{ type: 'tool-result', toolCallId: 'c2', isError: true, content: [{ type: 'text', text: 'Error POSTing to endpoint: 403 Forbidden' }] }],
+          source: { kind: 'tool', callId: 'c2' },
+        },
+      }, { surfaceOp: 'append' })
+      const reFlagged = await waitFor(async () => {
+        const row = await rowOf('authy')
+        return row?.auth?.required === true ? row : undefined
+      }, { what: 'authy re-flagged after 403' })
+      check('403 tool result re-flags auth.required', reFlagged?.auth?.required === true, reFlagged)
+
+      await app.fiber.dispose()
+    } finally {
+      await authServer.close()
+    }
   }
 
   finish('servers')

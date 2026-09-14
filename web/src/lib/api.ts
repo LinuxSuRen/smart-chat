@@ -53,6 +53,42 @@ export function saveToken(value: string, remember: boolean): void {
   } catch { /* private mode */ }
 }
 
+// ---- per-MCP-server tokens ---------------------------------------------
+// Target MCP servers that answer 401/403 get their token from a page dialog
+// (NOT from the server config): the bridge keeps them in host memory and
+// merges them into the transport at mount time. The page only caches them
+// here for convenience across reloads.
+const MCP_TOKENS_KEY = 'smart-chat.mcpTokens'
+
+function loadMcpTokenMap(): Record<string, string> {
+  try {
+    return JSON.parse(localStorage.getItem(MCP_TOKENS_KEY) ?? '{}') as Record<string, string>
+  } catch {
+    return {}
+  }
+}
+
+export function loadMcpToken(serverName: string): string {
+  return loadMcpTokenMap()[serverName] ?? ''
+}
+
+export function saveMcpToken(serverName: string, value: string, remember: boolean): void {
+  try {
+    const map = loadMcpTokenMap()
+    if (remember && value !== '') map[serverName] = value
+    else delete map[serverName]
+    localStorage.setItem(MCP_TOKENS_KEY, JSON.stringify(map))
+  } catch { /* private mode */ }
+}
+
+export async function submitServerToken(serverName: string, value: string): Promise<{ status: number; error?: string }> {
+  const res = await api<{ error?: string }>(`/servers/${encodeURIComponent(serverName)}/token`, {
+    method: 'POST',
+    body: { token: value },
+  })
+  return { status: res.status, error: res.data?.error }
+}
+
 export interface ApiResponse<T = unknown> {
   status: number
   data: T
@@ -93,6 +129,7 @@ export interface ApprovalRequiredEvent { approvalId: string; toolName: string; s
 export interface ApprovalResolvedEvent { approvalId: string; outcome: string }
 export interface TurnDoneEvent { seq: number; turn: number; reason: string }
 export interface ErrorEvent { message: string; code?: string }
+export interface CredentialRequiredEvent { serverName: string; reason: string }
 
 export interface BridgeEvents {
   ready: ReadyEvent
@@ -103,6 +140,7 @@ export interface BridgeEvents {
   approval_resolved: ApprovalResolvedEvent
   turn_done: TurnDoneEvent
   error: ErrorEvent
+  credential_required: CredentialRequiredEvent
 }
 
 export function openEvents(sessionId: string, handlers: {

@@ -66,10 +66,28 @@ npm run build     # or: npm run watch
 | `POST /sessions` | `{}` | `201 { sessionId }` |
 | `POST /messages` | `{ sessionId, text }` | `202` (reply arrives over SSE) |
 | `POST /sessions/{id}/cancel` | – | `202` — abort the running turn |
-| `GET /events?sessionId=` | – | SSE: `ready`/`assistant_delta`/`tool_call`/`tool_result`/`approval_required`/`approval_resolved`/`turn_done`/`error`, 15s heartbeat |
+| `GET /events?sessionId=` | – | SSE: `ready`/`assistant_delta`/`tool_call`/`tool_result`/`approval_required`/`approval_resolved`/`credential_required`/`turn_done`/`error`, 15s heartbeat |
 | `POST /approvals/{id}` | `{ decision: allow\|deny }` | `200`; unknown `404`; repeat `409` |
-| `GET /servers.json` | – | per-server `state/toolCount/error/logs/tools` |
+| `GET /servers.json` | – | per-server `state/toolCount/error/logs/tools` and `auth.required` for streamable-http entries |
 | `POST /servers` | `{ servers: [full list] }` | `200`; validation `400`; read-only settings `503` |
+| `POST /servers/{name}/token` | `{ token }` | `200` — store the server's bearer token and remount it; unknown `404`; stdio `400` |
+
+## MCP server tokens (401/403 → page prompt)
+
+Target MCP servers that require auth do **not** take their token from the server config. When a
+streamable-http server rejects the connection or a tool call with 401/403, the bridge:
+
+1. flags the server in `servers.json` (`auth: { required: true, reason }`) and streams a
+   `credential_required { serverName, reason }` SSE event,
+2. the page opens a token dialog (a remembered token from a previous session is re-submitted
+   automatically),
+3. `POST /servers/{name}/token` stores the token **in host memory only** — the settings layer
+   never sees an `Authorization` header — and remounts the server's mcp-client fiber with the
+   credential merged into the transport headers.
+
+The token is lost on dsh restart (by design); the page caches it in `localStorage` purely to
+re-submit it for you. A stale streamable-http session (`session not found`) is healed separately:
+the watchdog remounts the fiber automatically, no token involved.
 
 ## Configuration
 
@@ -110,6 +128,8 @@ servers:
 - `bridge.token` protects the page/REST/SSE with a shared secret. Recommended for local use;
   the token also travels as a query parameter on SSE (EventSource cannot send headers), so treat
   it as local-only. On first visit the page prompts for the token (`?token=` works too).
+- Per-MCP-server tokens live in host memory only (see above) — never in the settings layer, the
+  YAML config, or the repo. The page's `localStorage` cache is opt-out ("remember" checkbox).
 - `autoApproveTools: true` lets the model call every MCP tool without asking. Only enable this
   for local, fully trusted MCP servers — a tool with side effects will run unattended.
 

@@ -66,6 +66,7 @@ export interface ServerRow {
   logs: string[]
   tools: { name: string; description: string }[]
   entry: Record<string, unknown>
+  auth?: { required: boolean; reason?: string }
 }
 
 export interface ChatState {

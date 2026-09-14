@@ -57,6 +57,71 @@ export function zombieEntry(serverName = 'zombie') {
   return { serverName, transport: 'stdio', command: process.execPath, args: ['-e', ZOMBIE_MCP] }
 }
 
+/**
+ * A REAL streamable-http MCP server (plain node:http, JSON responses) that
+ * rejects every request with 401 until the client presents
+ * `Authorization: Bearer <token>`. Returns { url, close, calls } — the token
+ * is the placeholder below (never a real credential).
+ */
+export async function authHttpMcpServer(expectedToken = 'demo-mcp-token') {
+  const { createServer } = await import('node:http')
+  const calls = { total: 0, rejected: 0 }
+  const server = createServer((req, res) => {
+    const chunks = []
+    req.on('data', (c) => chunks.push(c))
+    req.on('end', () => {
+      calls.total += 1
+      const reply = (status, obj) => {
+        res.writeHead(status, { 'content-type': 'application/json' })
+        res.end(JSON.stringify(obj))
+      }
+      if (req.method !== 'POST') return reply(405, { error: 'POST only' })
+      let message = null
+      try { message = JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { /* ignore */ }
+      if (req.headers.authorization !== `Bearer ${expectedToken}`) {
+        calls.rejected += 1
+        return reply(401, {
+          jsonrpc: '2.0',
+          id: message?.id ?? null,
+          error: { code: -32001, message: 'Unauthorized: missing or invalid bearer token (401)' },
+        })
+      }
+      if (message?.method === 'initialize') {
+        return reply(200, {
+          jsonrpc: '2.0',
+          id: message.id,
+          result: {
+            protocolVersion: message.params?.protocolVersion ?? '2024-11-05',
+            capabilities: { tools: {} },
+            serverInfo: { name: 'authy', version: '1.0.0' },
+          },
+        })
+      }
+      if (message?.method === 'tools/list') {
+        return reply(200, {
+          jsonrpc: '2.0',
+          id: message.id,
+          result: { tools: [{ name: 'echo', description: 'authed echo', inputSchema: { type: 'object', properties: { text: { type: 'string' } } } }] },
+        })
+      }
+      if (message?.method === 'tools/call') {
+        return reply(200, {
+          jsonrpc: '2.0',
+          id: message.id,
+          result: { content: [{ type: 'text', text: 'echo: ' + (message.params?.arguments?.text ?? '') }] },
+        })
+      }
+      return reply(200, { jsonrpc: '2.0', id: message?.id ?? null, result: {} })
+    })
+  })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  return {
+    url: `http://127.0.0.1:${server.address().port}/mcp`,
+    calls,
+    close: () => new Promise((resolve) => server.close(resolve)),
+  }
+}
+
 export function mockReq({ method = 'GET', url = '/', headers = {} } = {}) {
   const req = new EventEmitter()
   req.method = method

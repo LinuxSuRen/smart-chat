@@ -9,10 +9,11 @@ interface Props {
   open: boolean
   onOpenChange: (open: boolean) => void
   onRefreshed: () => void | Promise<void>
+  onToken: (serverName: string, reason?: string) => void
 }
 
 /** Collapsible MCP server manager (the composer "+" opens it). */
-export const ServersPanel = memo(function ServersPanel({ servers, error, open, onOpenChange, onRefreshed }: Props) {
+export const ServersPanel = memo(function ServersPanel({ servers, error, open, onOpenChange, onRefreshed, onToken }: Props) {
   if (!open) {
     return (
       <button type="button" className={styles.ghost} onClick={() => onOpenChange(true)}>
@@ -76,21 +77,29 @@ export const ServersPanel = memo(function ServersPanel({ servers, error, open, o
       <div className={styles.panel}>
         <div className={styles.panelBody}>
           {error && <div className={styles.srvDetail}>{`status error: ${error}`}</div>}
-          {servers.map((s) => (
-            <div key={s.serverName} className={styles.srvRow}>
-              <span className={styles.srvName}>{s.serverName}</span>
-              <span className={styles.srvState} data-state={s.state}>
-                {s.state}
-              </span>
-              <span className={styles.srvDetail}>
-                {`${s.toolCount} tools`}
-                {s.error ? ` — ${s.error}` : ''}
-              </span>
-              <button type="button" className={styles.ghost} onClick={() => void remove(s.serverName)}>
-                remove
-              </button>
-            </div>
-          ))}
+          {servers.map((s) => {
+            const needsToken = s.auth?.required === true
+            return (
+              <div key={s.serverName} className={styles.srvRow}>
+                <span className={styles.srvName}>{s.serverName}</span>
+                <span className={styles.srvState} data-state={needsToken ? 'failed' : s.state}>
+                  {needsToken ? 'needs token' : s.state}
+                </span>
+                <span className={styles.srvDetail}>
+                  {`${s.toolCount} tools`}
+                  {s.error ? ` — ${s.error}` : ''}
+                </span>
+                {needsToken && (
+                  <button type="button" className={styles.ghost} onClick={() => onToken(s.serverName, s.auth?.reason)}>
+                    token…
+                  </button>
+                )}
+                <button type="button" className={styles.ghost} onClick={() => void remove(s.serverName)}>
+                  remove
+                </button>
+              </div>
+            )
+          })}
           {servers.length === 0 && <div className={styles.srvDetail}>no servers configured</div>}
           <form className={styles.addForm} onSubmit={(ev) => void onSubmit(ev)}>
             <input name="serverName" placeholder="name (a-z 0-9 _ -)" size={16} required />

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, loadToken, openEvents, UnauthorizedError } from './lib/api'
+import {
+  api, loadToken, openEvents, submitServerToken, saveToken, loadMcpToken, saveMcpToken, UnauthorizedError,
+} from './lib/api'
 import {
   makeDispatcher, pushSys, pushUser, setConn, setServers, setSessionId,
 } from './lib/store'
@@ -28,10 +30,36 @@ export function App() {
   const state = useChatState()
   const [theme, setTheme] = useState<Theme>(() => (localStorage.getItem(THEME_KEY) as Theme) ?? 'system')
   const [needToken, setNeedToken] = useState(false)
+  const [serverAuth, setServerAuth] = useState<{ serverName: string; reason: string } | null>(null)
   const [booted, setBooted] = useState(false)
   const [serversOpen, setServersOpen] = useState(false)
   const esRef = useRef<EventSource | null>(null)
   const sessionRef = useRef('')
+  const tokenTriedRef = useRef(new Set<string>())
+
+  // Submit a per-server MCP token; a stored one goes silently, a manual one
+  // comes from the dialog.
+  const sendServerToken = useCallback(async (serverName: string, value: string, manual: boolean) => {
+    tokenTriedRef.current.add(serverName)
+    try {
+      const res = await submitServerToken(serverName, value)
+      if (res.status === 200) {
+        pushSys(`token accepted for ${serverName} — please retry the request`)
+        setServerAuth(null)
+        void pollServersRef.current?.()
+        return
+      }
+      pushSys(`token rejected for ${serverName}: ${res.error ?? res.status}`)
+    } catch (err) {
+      if (err instanceof UnauthorizedError) {
+        setNeedToken(true)
+        return
+      }
+      pushSys(`token submit failed for ${serverName}: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    if (manual) setServerAuth({ serverName, reason: 'retry — the previous token was rejected' })
+  }, [])
+  const pollServersRef = useRef<(() => void) | null>(null)
 
   useEffect(() => {
     applyTheme(theme)
@@ -63,9 +91,17 @@ export function App() {
       approval_resolved: (d) => dispatch('approval_resolved', d as unknown as Record<string, unknown>),
       turn_done: (d) => dispatch('turn_done', d as unknown as Record<string, unknown>),
       error: (d) => dispatch('error', d as unknown as Record<string, unknown>),
+      credential_required: (d) => {
+        const stored = loadMcpToken(d.serverName)
+        if (stored !== '' && !tokenTriedRef.current.has(d.serverName)) {
+          void sendServerToken(d.serverName, stored, false)
+        } else {
+          setServerAuth({ serverName: d.serverName, reason: d.reason })
+        }
+      },
     })
     esRef.current.addEventListener('error', () => setConn('closed'))
-  }, [])
+  }, [sendServerToken])
 
   const newSession = useCallback(async () => {
     try {
@@ -112,7 +148,17 @@ export function App() {
   const pollServers = useCallback(async () => {
     try {
       const res = await api<{ servers: ServerRow[] }>('/servers.json')
-      if (res.status === 200) setServers(res.data.servers ?? [])
+      if (res.status === 200) {
+        setServers(res.data.servers ?? [])
+        // Auto-resubmit remembered tokens for servers flagged as unauthorized.
+        for (const row of res.data.servers ?? []) {
+          if (row.auth?.required !== true) continue
+          const stored = loadMcpToken(row.serverName)
+          if (stored !== '' && !tokenTriedRef.current.has(row.serverName)) {
+            void sendServerToken(row.serverName, stored, false)
+          }
+        }
+      }
     } catch (err) {
       if (err instanceof UnauthorizedError) {
         setNeedToken(true)
@@ -120,7 +166,11 @@ export function App() {
       }
       setServers([], err instanceof Error ? err.message : String(err))
     }
-  }, [])
+  }, [sendServerToken])
+
+  // Assigned after definition: sendServerToken (declared earlier) fires it
+  // when a token is accepted so the server bar refreshes immediately.
+  pollServersRef.current = () => { void pollServers() }
 
   useEffect(() => {
     if (!booted) return
@@ -180,6 +230,7 @@ export function App() {
               open={serversOpen}
               onOpenChange={setServersOpen}
               onRefreshed={pollServers}
+              onToken={(name, reason) => setServerAuth({ serverName: name, reason: reason ?? 'This MCP server rejected the request as unauthorized (401/403).' })}
             />
             <button type="button" className={layout.ghost} onClick={() => openStream(sessionRef.current)}>
               Reconnect
@@ -213,11 +264,23 @@ export function App() {
       </div>
       {needToken && (
         <TokenModal
-          onSaved={() => {
+          onSaved={(value) => {
+            saveToken(value, true)
             setNeedToken(false)
             void newSession()
             void pollServers()
           }}
+        />
+      )}
+      {serverAuth && !needToken && (
+        <TokenModal
+          title={`Token required: ${serverAuth.serverName}`}
+          hint={`${serverAuth.reason ?? 'This MCP server rejected the request as unauthorized (401/403).'} The token is kept in the bridge memory only — it is never written into the server config.`}
+          onSaved={(value, remember) => {
+            saveMcpToken(serverAuth.serverName, value, remember)
+            void sendServerToken(serverAuth.serverName, value, true)
+          }}
+          onCancel={() => setServerAuth(null)}
         />
       )}
     </div>
