@@ -253,19 +253,35 @@
   margin: 0 0 8px;
 }
 
+.modalCard input[type="text"],
 .modalCard input[type="password"] {
   width: 100%;
   font: inherit;
+  font-size: 14px;
   padding: 7px 10px;
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 10px;
   background: var(--dsw-alias-bg-base);
   color: var(--dsw-alias-label-primary);
   outline: none;
+  transition: border-color var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
+.modalCard input[type="text"]::placeholder,
+.modalCard input[type="password"]::placeholder {
+  color: var(--dsw-alias-label-caption);
+  user-select: none;
+}
+
+.modalCard input[type="text"]:focus,
 .modalCard input[type="password"]:focus {
   border-color: var(--dsw-alias-state-business-primary);
+}
+
+.modalCard input[type="radio"],
+.modalCard input[type="checkbox"] {
+  accent-color: var(--dsw-alias-state-business-primary);
+  margin: 0;
 }
 
 .modalActions {
@@ -273,6 +289,22 @@
   gap: 8px;
   justify-content: flex-end;
   margin-top: 12px;
+}
+
+.modalPrimary {
+  color: #fff;
+  background: var(--dsw-alias-button-info-fill);
+  border: none;
+  border-radius: 9999px;
+  cursor: pointer;
+  padding: 6px 18px;
+  font-size: 13px;
+  line-height: 18px;
+  transition: background-color var(--ds-transition-duration-fast) var(--ds-ease-in-out);
+}
+
+.modalPrimary:hover {
+  background: var(--dsw-alias-button-info-hover);
 }
 
 .remember {
@@ -285,18 +317,35 @@
 }
 
 .credMode {
-  display: flex;
-  gap: 14px;
+  display: inline-flex;
+  gap: 2px;
   font-size: 12.5px;
   color: var(--dsw-alias-label-secondary);
-  margin: 8px 0 2px;
+  margin: 6px 0 8px;
+  padding: 3px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  border-radius: 9999px;
 }
 
 .credMode label {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   cursor: pointer;
+  padding: 4px 12px;
+  border-radius: 9999px;
+  color: var(--dsw-alias-label-tertiary);
+  transition: background-color var(--ds-transition-duration-fast) var(--ds-ease-in-out), color var(--ds-transition-duration-fast) var(--ds-ease-in-out);
+}
+
+.credMode label:has(input:checked) {
+  background: var(--dsw-alias-bg-base);
+  color: var(--dsw-alias-label-primary);
+  box-shadow: var(--dsw-shadow-lv1);
+}
+
+.credMode input[type="radio"] {
+  display: none;
 }
 
 .credFields {

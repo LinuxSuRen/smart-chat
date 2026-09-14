@@ -97,7 +97,7 @@ export const TokenModal = memo(function TokenModal({
             />
             <input
               type="text"
-              placeholder="login URL (optional; default: the entry's auth.loginUrl or <origin>/api/v1/auth/login)"
+              placeholder="login URL (optional)"
               autoComplete="off"
               value={loginUrl}
               onChange={(ev) => setLoginUrl(ev.target.value)}
@@ -114,7 +114,7 @@ export const TokenModal = memo(function TokenModal({
               Cancel
             </button>
           )}
-          <button type="button" className={styles.ghost} onClick={save}>
+          <button type="button" className={styles.modalPrimary} onClick={save}>
             Save
           </button>
         </div>
