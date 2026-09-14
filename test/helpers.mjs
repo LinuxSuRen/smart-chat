@@ -60,25 +60,64 @@ export function zombieEntry(serverName = 'zombie') {
 /**
  * A REAL streamable-http MCP server (plain node:http, JSON responses) that
  * rejects every request with 401 until the client presents
- * `Authorization: Bearer <token>`. Returns { url, close, calls } — the token
- * is the placeholder below (never a real credential).
+ * `Authorization: Bearer <token>`. It also exposes a robot-platform style
+ * login endpoint (POST /api/v1/auth/login) that issues a session JWT for
+ * {username, password} — new style via Set-Cookie auth_token, legacy style
+ * via the response body's token field (loginStyle option). Accepts the JWT
+ * as EITHER a Bearer header or an auth_token cookie.
+ * Returns { url, baseUrl, close, calls } — all values are placeholders.
  */
-export async function authHttpMcpServer(expectedToken = 'demo-mcp-token') {
+export async function authHttpMcpServer(expectedToken = 'demo-mcp-token', opts = {}) {
+  const loginStyle = opts.loginStyle ?? 'cookie'
+  const username = opts.username ?? 'demo-user'
+  const password = opts.password ?? 'demo-password'
+  const jwtPrefix = opts.jwtPrefix ?? 'demo-jwt-'
+  let jwtCounter = 0
+  const state = { logins: 0, issuedJwts: [], sessionValid: true }
   const { createServer } = await import('node:http')
   const calls = { total: 0, rejected: 0 }
+  const isAuthorized = (req) => {
+    if (!state.sessionValid) return false
+    if (req.headers.authorization === `Bearer ${expectedToken}`) return true
+    const auth = req.headers.authorization ?? ''
+    const cookie = req.headers.cookie ?? ''
+    if (auth.startsWith('Bearer ') && auth.slice(7).startsWith(jwtPrefix)) return true
+    if (cookie.includes(`auth_token=${jwtPrefix}`)) return true
+    return false
+  }
   const server = createServer((req, res) => {
     const chunks = []
     req.on('data', (c) => chunks.push(c))
     req.on('end', () => {
       calls.total += 1
-      const reply = (status, obj) => {
-        res.writeHead(status, { 'content-type': 'application/json' })
+      const reply = (status, obj, headers) => {
+        res.writeHead(status, { 'content-type': 'application/json', ...(headers ?? {}) })
         res.end(JSON.stringify(obj))
       }
-      if (req.method !== 'POST') return reply(405, { error: 'POST only' })
       let message = null
       try { message = JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { /* ignore */ }
-      if (req.headers.authorization !== `Bearer ${expectedToken}`) {
+
+      // robot-platform style login endpoint.
+      if (req.method === 'POST' && req.url.endsWith('/api/v1/auth/login')) {
+        state.logins += 1
+        if (message?.username !== username || message?.password !== password) {
+          return reply(200, { code: 40100, message: 'wrong username or password' })
+        }
+        const jwt = `${jwtPrefix}${Date.now()}-${state.logins}-${++jwtCounter}`
+        state.issuedJwts.push(jwt)
+        state.sessionValid = true
+        if (loginStyle === 'cookie') {
+          return reply(200, { ok: true }, { 'Set-Cookie': `auth_token=${jwt}; Path=/; HttpOnly` })
+        }
+        return reply(200, { token: jwt })
+      }
+      if (req.method === 'POST' && req.url.endsWith('/api/v1/auth/logout')) {
+        state.sessionValid = false
+        return reply(200, { ok: true })
+      }
+
+      if (req.method !== 'POST') return reply(405, { error: 'POST only' })
+      if (!isAuthorized(req)) {
         calls.rejected += 1
         return reply(401, {
           jsonrpc: '2.0',
@@ -115,9 +154,14 @@ export async function authHttpMcpServer(expectedToken = 'demo-mcp-token') {
     })
   })
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const base = `http://127.0.0.1:${server.address().port}`
   return {
-    url: `http://127.0.0.1:${server.address().port}/mcp`,
+    url: `${base}/mcp`,
+    baseUrl: base,
+    loginUrl: `${base}/api/v1/auth/login`,
+    logoutUrl: `${base}/api/v1/auth/logout`,
     calls,
+    state,
     close: () => new Promise((resolve) => server.close(resolve)),
   }
 }

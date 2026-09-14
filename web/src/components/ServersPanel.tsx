@@ -83,7 +83,7 @@ export const ServersPanel = memo(function ServersPanel({ servers, error, open, o
               <div key={s.serverName} className={styles.srvRow}>
                 <span className={styles.srvName}>{s.serverName}</span>
                 <span className={styles.srvState} data-state={needsToken ? 'failed' : s.state}>
-                  {needsToken ? 'needs token' : s.state}
+                  {needsToken ? 'needs login' : s.state}
                 </span>
                 <span className={styles.srvDetail}>
                   {`${s.toolCount} tools`}
@@ -91,7 +91,7 @@ export const ServersPanel = memo(function ServersPanel({ servers, error, open, o
                 </span>
                 {needsToken && (
                   <button type="button" className={styles.ghost} onClick={() => onToken(s.serverName, s.auth?.reason)}>
-                    token…
+                    login…
                   </button>
                 )}
                 <button type="button" className={styles.ghost} onClick={() => void remove(s.serverName)}>

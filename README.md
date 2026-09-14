@@ -70,24 +70,36 @@ npm run build     # or: npm run watch
 | `POST /approvals/{id}` | `{ decision: allow\|deny }` | `200`; unknown `404`; repeat `409` |
 | `GET /servers.json` | – | per-server `state/toolCount/error/logs/tools` and `auth.required` for streamable-http entries |
 | `POST /servers` | `{ servers: [full list] }` | `200`; validation `400`; read-only settings `503` |
-| `POST /servers/{name}/token` | `{ token }` | `200` — store the server's bearer token and remount it; unknown `404`; stdio `400` |
+| `POST /servers/{name}/credentials` (alias `/token`) | `{ token }` or `{ username, password, loginUrl? }` | `200` — store credentials and remount; unknown `404`; stdio `400`; failed login `400` |
 
-## MCP server tokens (401/403 → page prompt)
+## MCP server credentials (401/403 → page prompt: token OR username+password)
 
-Target MCP servers that require auth do **not** take their token from the server config. When a
-streamable-http server rejects the connection or a tool call with 401/403, the bridge:
+Target MCP servers that require auth do **not** take their credentials from the server config.
+When a streamable-http server rejects the connection or a tool call with 401/403, the bridge:
 
-1. flags the server in `servers.json` (`auth: { required: true, reason }`) and streams a
+1. flags the server in `servers.json` (`auth: { required: true, reason, has? }`) and streams a
    `credential_required { serverName, reason }` SSE event,
-2. the page opens a token dialog (a remembered token from a previous session is re-submitted
-   automatically),
-3. `POST /servers/{name}/token` stores the token **in host memory only** — the settings layer
-   never sees an `Authorization` header — and remounts the server's mcp-client fiber with the
-   credential merged into the transport headers.
+2. the page opens a credential dialog with two modes (a remembered record from a previous
+   session is re-submitted automatically):
+   - **token** — pasted bearer token, sent as `Authorization: Bearer`;
+   - **username + password** — the bridge performs the login itself, robot-platform style:
+     `POST {loginUrl}` with JSON `{username, password}`; on 200 the session JWT is taken from
+     `Set-Cookie: auth_token=...` first, falling back to the response body's `token` field; the
+     JWT is then carried in BOTH forms (`Authorization: Bearer` + `Cookie: auth_token=`),
+     matching deployments where only one of the two middlewares is active,
+3. `POST /servers/{name}/credentials` stores everything **in host memory only** — the settings
+   layer never sees a credential — and remounts the server's mcp-client fiber with the merged
+   headers.
 
-The token is lost on dsh restart (by design); the page caches it in `localStorage` purely to
-re-submit it for you. A stale streamable-http session (`session not found`) is healed separately:
-the watchdog remounts the fiber automatically, no token involved.
+The `loginUrl` defaults to the entry's `auth.loginUrl` (optional field on streamable-http
+entries, see below) and otherwise to `<origin of url>/api/v1/auth/login`.
+
+When a later 401/403 arrives and username+password credentials are stored, the bridge
+**re-logs-in automatically** and remounts — no prompt. The page only gets involved when no
+credentials are stored or the login itself fails. Everything is lost on dsh restart (by design);
+the page caches credentials in `localStorage` purely to re-submit them for you. A stale
+streamable-http session (`session not found`) is healed separately: the watchdog remounts the
+fiber automatically, no credentials involved.
 
 ## Configuration
 
@@ -99,7 +111,9 @@ servers:
   - serverName: demo-http          # [A-Za-z0-9_-]{1,32}, unique
     transport: streamable-http
     url: https://mcp.example.com/mcp
-    headers: { Authorization: Bearer demo-placeholder-token }
+    headers: { X-Extra: demo }      # static headers (credentials belong in the dialog, not here)
+    auth:
+      loginUrl: https://api.example.com/api/v1/auth/login   # optional; default <origin>/api/v1/auth/login
   - serverName: demo-stdio
     transport: stdio
     command: /usr/local/bin/demo-mcp-server

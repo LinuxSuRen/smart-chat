@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  api, loadToken, openEvents, submitServerToken, saveToken, loadMcpToken, saveMcpToken, UnauthorizedError,
+  api, loadToken, openEvents, submitServerCredential, saveToken,
+  loadMcpCredential, saveMcpCredential, UnauthorizedError,
 } from './lib/api'
+import type { ServerCredential } from './lib/api'
 import {
   makeDispatcher, pushSys, pushUser, setConn, setServers, setSessionId,
 } from './lib/store'
@@ -37,27 +39,27 @@ export function App() {
   const sessionRef = useRef('')
   const tokenTriedRef = useRef(new Set<string>())
 
-  // Submit a per-server MCP token; a stored one goes silently, a manual one
-  // comes from the dialog.
-  const sendServerToken = useCallback(async (serverName: string, value: string, manual: boolean) => {
+  // Submit per-server MCP credentials; a remembered record goes silently,
+  // a manual one comes from the dialog.
+  const sendServerCredential = useCallback(async (serverName: string, cred: ServerCredential, manual: boolean) => {
     tokenTriedRef.current.add(serverName)
     try {
-      const res = await submitServerToken(serverName, value)
+      const res = await submitServerCredential(serverName, cred)
       if (res.status === 200) {
-        pushSys(`token accepted for ${serverName} — please retry the request`)
+        pushSys(`credentials accepted for ${serverName} — please retry the request`)
         setServerAuth(null)
         void pollServersRef.current?.()
         return
       }
-      pushSys(`token rejected for ${serverName}: ${res.error ?? res.status}`)
+      pushSys(`credentials rejected for ${serverName}: ${res.error ?? res.status}`)
     } catch (err) {
       if (err instanceof UnauthorizedError) {
         setNeedToken(true)
         return
       }
-      pushSys(`token submit failed for ${serverName}: ${err instanceof Error ? err.message : String(err)}`)
+      pushSys(`credential submit failed for ${serverName}: ${err instanceof Error ? err.message : String(err)}`)
     }
-    if (manual) setServerAuth({ serverName, reason: 'retry — the previous token was rejected' })
+    if (manual) setServerAuth({ serverName, reason: 'retry — the previous credentials were rejected' })
   }, [])
   const pollServersRef = useRef<(() => void) | null>(null)
 
@@ -92,16 +94,16 @@ export function App() {
       turn_done: (d) => dispatch('turn_done', d as unknown as Record<string, unknown>),
       error: (d) => dispatch('error', d as unknown as Record<string, unknown>),
       credential_required: (d) => {
-        const stored = loadMcpToken(d.serverName)
-        if (stored !== '' && !tokenTriedRef.current.has(d.serverName)) {
-          void sendServerToken(d.serverName, stored, false)
+        const stored = loadMcpCredential(d.serverName)
+        if (stored !== null && !tokenTriedRef.current.has(d.serverName)) {
+          void sendServerCredential(d.serverName, stored, false)
         } else {
           setServerAuth({ serverName: d.serverName, reason: d.reason })
         }
       },
     })
     esRef.current.addEventListener('error', () => setConn('closed'))
-  }, [sendServerToken])
+  }, [sendServerCredential])
 
   const newSession = useCallback(async () => {
     try {
@@ -150,12 +152,14 @@ export function App() {
       const res = await api<{ servers: ServerRow[] }>('/servers.json')
       if (res.status === 200) {
         setServers(res.data.servers ?? [])
-        // Auto-resubmit remembered tokens for servers flagged as unauthorized.
+        // Auto-resubmit remembered credentials for servers flagged as
+        // unauthorized (covers connection-level 401s; tool-call 401s with a
+        // stored password are re-logged-in host-side without the page).
         for (const row of res.data.servers ?? []) {
           if (row.auth?.required !== true) continue
-          const stored = loadMcpToken(row.serverName)
-          if (stored !== '' && !tokenTriedRef.current.has(row.serverName)) {
-            void sendServerToken(row.serverName, stored, false)
+          const stored = loadMcpCredential(row.serverName)
+          if (stored !== null && !tokenTriedRef.current.has(row.serverName)) {
+            void sendServerCredential(row.serverName, stored, false)
           }
         }
       }
@@ -166,10 +170,10 @@ export function App() {
       }
       setServers([], err instanceof Error ? err.message : String(err))
     }
-  }, [sendServerToken])
+  }, [sendServerCredential])
 
-  // Assigned after definition: sendServerToken (declared earlier) fires it
-  // when a token is accepted so the server bar refreshes immediately.
+  // Assigned after definition: sendServerCredential (declared earlier) fires
+  // it when credentials are accepted so the server bar refreshes immediately.
   pollServersRef.current = () => { void pollServers() }
 
   useEffect(() => {
@@ -264,8 +268,8 @@ export function App() {
       </div>
       {needToken && (
         <TokenModal
-          onSaved={(value) => {
-            saveToken(value, true)
+          onSaved={(cred) => {
+            if (cred.kind === 'token') saveToken(cred.token ?? '', true)
             setNeedToken(false)
             void newSession()
             void pollServers()
@@ -274,11 +278,12 @@ export function App() {
       )}
       {serverAuth && !needToken && (
         <TokenModal
-          title={`Token required: ${serverAuth.serverName}`}
-          hint={`${serverAuth.reason ?? 'This MCP server rejected the request as unauthorized (401/403).'} The token is kept in the bridge memory only — it is never written into the server config.`}
-          onSaved={(value, remember) => {
-            saveMcpToken(serverAuth.serverName, value, remember)
-            void sendServerToken(serverAuth.serverName, value, true)
+          title={`Credentials required: ${serverAuth.serverName}`}
+          hint={`${serverAuth.reason ?? 'This MCP server rejected the request as unauthorized (401/403).'} Credentials are kept in the bridge memory only — never in the server config. With username + password the bridge logs in itself and refreshes the session automatically.`}
+          allowPassword
+          onSaved={(cred, remember) => {
+            saveMcpCredential(serverAuth.serverName, cred, remember)
+            void sendServerCredential(serverAuth.serverName, cred, true)
           }}
           onCancel={() => setServerAuth(null)}
         />

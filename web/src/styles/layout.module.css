@@ -283,3 +283,24 @@
   color: var(--dsw-alias-label-tertiary);
   margin-top: 10px;
 }
+
+.credMode {
+  display: flex;
+  gap: 14px;
+  font-size: 12.5px;
+  color: var(--dsw-alias-label-secondary);
+  margin: 8px 0 2px;
+}
+
+.credMode label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.credFields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}

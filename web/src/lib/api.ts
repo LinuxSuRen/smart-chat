@@ -53,38 +53,58 @@ export function saveToken(value: string, remember: boolean): void {
   } catch { /* private mode */ }
 }
 
-// ---- per-MCP-server tokens ---------------------------------------------
-// Target MCP servers that answer 401/403 get their token from a page dialog
-// (NOT from the server config): the bridge keeps them in host memory and
-// merges them into the transport at mount time. The page only caches them
+// ---- per-MCP-server credentials -----------------------------------------
+// Target MCP servers that answer 401/403 get their credentials from a page
+// dialog (NOT from the server config): either a pasted token or a
+// username+password pair (the bridge performs the login itself,
+// robot-platform style, and re-logs-in automatically when the session JWT
+// expires). The bridge keeps them in host memory; the page only caches them
 // here for convenience across reloads.
 const MCP_TOKENS_KEY = 'smart-chat.mcpTokens'
 
-function loadMcpTokenMap(): Record<string, string> {
+export interface ServerCredential {
+  kind: 'token' | 'password'
+  token?: string
+  username?: string
+  password?: string
+  loginUrl?: string
+}
+
+function loadCredMap(): Record<string, ServerCredential> {
   try {
-    return JSON.parse(localStorage.getItem(MCP_TOKENS_KEY) ?? '{}') as Record<string, string>
+    const raw = JSON.parse(localStorage.getItem(MCP_TOKENS_KEY) ?? '{}') as Record<string, unknown>
+    const out: Record<string, ServerCredential> = {}
+    for (const [name, value] of Object.entries(raw)) {
+      // Migrate the legacy plain-string form to a token record.
+      if (typeof value === 'string') out[name] = { kind: 'token', token: value }
+      else if (value !== null && typeof value === 'object') out[name] = value as ServerCredential
+    }
+    return out
   } catch {
     return {}
   }
 }
 
-export function loadMcpToken(serverName: string): string {
-  return loadMcpTokenMap()[serverName] ?? ''
+export function loadMcpCredential(serverName: string): ServerCredential | null {
+  return loadCredMap()[serverName] ?? null
 }
 
-export function saveMcpToken(serverName: string, value: string, remember: boolean): void {
+export function saveMcpCredential(serverName: string, cred: ServerCredential, remember: boolean): void {
   try {
-    const map = loadMcpTokenMap()
-    if (remember && value !== '') map[serverName] = value
+    const map = loadCredMap()
+    if (remember) map[serverName] = cred
     else delete map[serverName]
     localStorage.setItem(MCP_TOKENS_KEY, JSON.stringify(map))
   } catch { /* private mode */ }
 }
 
-export async function submitServerToken(serverName: string, value: string): Promise<{ status: number; error?: string }> {
-  const res = await api<{ error?: string }>(`/servers/${encodeURIComponent(serverName)}/token`, {
+export async function submitServerCredential(
+  serverName: string,
+  cred: ServerCredential,
+): Promise<{ status: number; error?: string }> {
+  const res = await api<{ error?: string }>(`/servers/${encodeURIComponent(serverName)}/credentials`, {
     method: 'POST',
-    body: { token: value },
+    body: cred,
   })
   return { status: res.status, error: res.data?.error }
 }
