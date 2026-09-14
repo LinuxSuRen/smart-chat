@@ -128,7 +128,9 @@ export function App() {
       error: (d) => dispatch('error', d as unknown as Record<string, unknown>),
       credential_required: (d) => {
         // Auth was missing when it mattered: if a message is still
-        // unanswered, hold it for the automatic continue after login.
+        // unanswered, hold it for the automatic continue after login. The
+        // dialog shows only its title — raw server errors stay in the
+        // servers.json diagnostics.
         if (!lastSentRef.current.answered && lastSentRef.current.text !== '') {
           pendingAuthMessageRef.current = lastSentRef.current.text
         }
@@ -136,7 +138,7 @@ export function App() {
         if (stored !== null && !tokenTriedRef.current.has(d.serverName)) {
           void sendServerCredential(d.serverName, stored, false)
         } else {
-          setServerAuth({ serverName: d.serverName, reason: d.reason })
+          setServerAuth({ serverName: d.serverName, reason: '' })
         }
       },
     })
@@ -280,7 +282,7 @@ export function App() {
               open={serversOpen}
               onOpenChange={setServersOpen}
               onRefreshed={pollServers}
-              onToken={(name, reason) => setServerAuth({ serverName: name, reason: reason ?? 'This MCP server rejected the request as unauthorized (401/403).' })}
+              onToken={(name) => setServerAuth({ serverName: name, reason: '' })}
             />
             <button type="button" className={layout.ghost} onClick={() => openStream(sessionRef.current)}>
               Reconnect

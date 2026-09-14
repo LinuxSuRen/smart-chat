@@ -298,7 +298,7 @@ async function main() {
         await new Promise((resolve) => setTimeout(resolve, 500))
         check('no frame for the server-own-domain 401', !sse.frames().some((f) => f.event === 'credential_required' && f.data?.serverName === 'echo2'))
         const frame = await waitFor(() => sse.frames().find((f) => f.event === 'credential_required' && f.data?.serverName === 'authy'), { what: 'credential_required frame for authy' })
-        check('frame asks for platform credentials', String(frame.data?.reason).includes('platform credentials'), frame.data)
+        check('frame keeps the reason clean', frame.data?.reason === 'login required', frame.data)
         const tokenRoute = await call(handler, 'POST', `/smart-chat/servers/echo2/token`, '{"token":"x"}')
         check('stdio server token rejected 400', tokenRoute.status === 400, tokenRoute.status)
         sse.req.emit('close')
