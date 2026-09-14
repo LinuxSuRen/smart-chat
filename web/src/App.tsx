@@ -38,20 +38,47 @@ export function App() {
   const esRef = useRef<EventSource | null>(null)
   const sessionRef = useRef('')
   const tokenTriedRef = useRef(new Set<string>())
+  // Invisible-auth continuation: the text of the message that was held (or
+  // interrupted) by a missing login, re-sent automatically once credentials
+  // land. `lastSent` tracks the in-flight turn so a mid-turn 401 also
+  // qualifies.
+  const pendingAuthMessageRef = useRef<string | null>(null)
+  const lastSentRef = useRef<{ text: string; answered: boolean }>({ text: '', answered: true })
+
+  // Raw send: submits the text without touching the UI (the caller decides
+  // whether the user bubble already exists — a re-send after login must not
+  // duplicate it).
+  const doSubmit = useCallback(async (text: string) => {
+    const res = await api<{ error?: string; code?: string; servers?: string[] }>('/messages', {
+      method: 'POST',
+      body: { sessionId: sessionRef.current, text },
+    })
+    return res
+  }, [])
 
   // Submit per-server MCP credentials; a remembered record goes silently,
-  // a manual one comes from the dialog.
+  // a manual one comes from the dialog. On success the held message (if
+  // any) is re-sent so the interrupted conversation continues by itself.
   const sendServerCredential = useCallback(async (serverName: string, cred: ServerCredential, manual: boolean) => {
     tokenTriedRef.current.add(serverName)
     try {
       const res = await submitServerCredential(serverName, cred)
       if (res.status === 200) {
-        pushSys(`credentials accepted for ${serverName} — please retry the request`)
         setServerAuth(null)
         void pollServersRef.current?.()
+        const held = pendingAuthMessageRef.current
+        if (held !== null) {
+          pendingAuthMessageRef.current = null
+          pushSys(`logged in — continuing: ${held.length > 60 ? held.slice(0, 60) + '…' : held}`)
+          lastSentRef.current = { text: held, answered: false }
+          const retry = await doSubmit(held)
+          if (retry.status !== 202) pushSys(`continue failed: ${retry.data?.error ?? retry.status}`)
+        } else {
+          pushSys(`logged in to ${serverName} — you can retry the request`)
+        }
         return
       }
-      pushSys(`credentials rejected for ${serverName}: ${res.error ?? res.status}`)
+      pushSys(`login rejected for ${serverName}: ${res.error ?? res.status}`)
     } catch (err) {
       if (err instanceof UnauthorizedError) {
         setNeedToken(true)
@@ -60,7 +87,7 @@ export function App() {
       pushSys(`credential submit failed for ${serverName}: ${err instanceof Error ? err.message : String(err)}`)
     }
     if (manual) setServerAuth({ serverName, reason: 'retry — the previous credentials were rejected' })
-  }, [])
+  }, [doSubmit])
   const pollServersRef = useRef<(() => void) | null>(null)
 
   useEffect(() => {
@@ -91,9 +118,22 @@ export function App() {
       tool_result: (d) => dispatch('tool_result', d as unknown as Record<string, unknown>),
       approval_required: (d) => dispatch('approval_required', d as unknown as Record<string, unknown>),
       approval_resolved: (d) => dispatch('approval_resolved', d as unknown as Record<string, unknown>),
-      turn_done: (d) => dispatch('turn_done', d as unknown as Record<string, unknown>),
+      turn_done: (d) => {
+        // A completed (non-error) turn answers the in-flight message; an
+        // errored one (e.g. mid-turn 401) leaves it eligible for the
+        // auto-continue after login.
+        if (String((d as { reason?: string }).reason ?? '') !== 'error') {
+          lastSentRef.current.answered = true
+        }
+        dispatch('turn_done', d as unknown as Record<string, unknown>)
+      },
       error: (d) => dispatch('error', d as unknown as Record<string, unknown>),
       credential_required: (d) => {
+        // Auth was missing when it mattered: if a message is still
+        // unanswered, hold it for the automatic continue after login.
+        if (!lastSentRef.current.answered && lastSentRef.current.text !== '') {
+          pendingAuthMessageRef.current = lastSentRef.current.text
+        }
         const stored = loadMcpCredential(d.serverName)
         if (stored !== null && !tokenTriedRef.current.has(d.serverName)) {
           void sendServerCredential(d.serverName, stored, false)
@@ -183,13 +223,24 @@ export function App() {
     return () => window.clearInterval(timer)
   }, [booted, pollServers, needToken])
 
-  const send = useCallback(async (text: string) => {
-    pushUser(text)
+  const send = useCallback(async (text: string, opts: { bubble?: boolean } = {}) => {
+    const showBubble = opts.bubble !== false
+    if (showBubble) pushUser(text)
+    lastSentRef.current = { text, answered: false }
     try {
-      const res = await api<{ error?: string }>('/messages', {
-        method: 'POST',
-        body: { sessionId: sessionRef.current, text },
-      })
+      const res = await doSubmit(text)
+      if (res.status === 409 && res.data?.code === 'credentials-required') {
+        // Input-time gate: the bridge held the message because a mounted
+        // server has no credentials yet. Show the login dialog; the message
+        // continues automatically once the login succeeds.
+        pendingAuthMessageRef.current = text
+        const servers = res.data.servers ?? []
+        setServerAuth({
+          serverName: servers[0] ?? 'MCP server',
+          reason: `${res.data.error ?? 'login required'} — your message continues automatically after login.`,
+        })
+        return
+      }
       if (res.status !== 202) pushSys(`message rejected: ${res.data?.error ?? res.status}`)
     } catch (err) {
       if (err instanceof UnauthorizedError) {
@@ -198,7 +249,7 @@ export function App() {
       }
       pushSys(`send failed: ${err instanceof Error ? err.message : String(err)}`)
     }
-  }, [])
+  }, [doSubmit])
 
   const stop = useCallback(async () => {
     try {
@@ -285,7 +336,10 @@ export function App() {
             saveMcpCredential(serverAuth.serverName, cred, remember)
             void sendServerCredential(serverAuth.serverName, cred, true)
           }}
-          onCancel={() => setServerAuth(null)}
+          onCancel={() => {
+            pendingAuthMessageRef.current = null
+            setServerAuth(null)
+          }}
         />
       )}
     </div>

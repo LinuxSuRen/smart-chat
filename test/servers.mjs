@@ -219,15 +219,27 @@ async function main() {
         return row?.auth?.required === true ? row : undefined
       }, { what: 'authy flagged before login' })
 
-      // Wrong credentials are rejected by the login endpoint.
+      // Input-time gate: while credentials are missing, messages are held
+      // with 409 credentials-required instead of running into 401s.
+      const created = await call(handler, 'POST', '/smart-chat/sessions', '{}')
+      const sid = created.json.sessionId
+      const held = await call(handler, 'POST', '/smart-chat/messages', JSON.stringify({ sessionId: sid, text: 'list alarms' }))
+      check('message held 409 while unauthenticated', held.status === 409 && held.json?.code === 'credentials-required' && held.json?.servers?.[0] === 'authy', held.json)
+
+      // Wrong credentials are rejected by the login endpoint; the gate stays.
       const bad = await call(handler, 'POST', '/smart-chat/servers/authy/credentials', JSON.stringify({ username: 'demo-user', password: 'wrong' }))
       check('wrong password rejected 400', bad.status === 400 && String(bad.json?.error).length > 0, bad)
+      const stillHeld = await call(handler, 'POST', '/smart-chat/messages', JSON.stringify({ sessionId: sid, text: 'list alarms' }))
+      check('message still held after failed login', stillHeld.status === 409, stillHeld.status)
 
-      // Correct credentials: the bridge logs in (Set-Cookie style) and
-      // remounts with Bearer + Cookie dual form.
+      // Correct credentials: the bridge logs in (Set-Cookie style), remounts
+      // with Bearer + Cookie dual form, and the gate opens — the held
+      // message can now flow.
       const good = await call(handler, 'POST', '/smart-chat/servers/authy/credentials', JSON.stringify({ username: 'demo-user', password: 'demo-password' }))
       check('login accepted 200', good.status === 200, good)
       check('login performed', authServer.state.logins >= 1, authServer.state.logins)
+      const released = await call(handler, 'POST', '/smart-chat/messages', JSON.stringify({ sessionId: sid, text: 'list alarms' }))
+      check('message flows after login', released.status === 202, released.status)
       await waitFor(() => app.get('tools').schemas(undefined).some((s) => s.name === 'mcp__authy__echo'), { what: 'authy tools after login' })
       const ok = await rowOf('authy')
       check('connected after login', ok?.state === 'connected' && ok?.toolCount === 1, ok)

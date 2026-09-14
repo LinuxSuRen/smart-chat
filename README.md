@@ -64,7 +64,7 @@ npm run build     # or: npm run watch
 | `GET /assets/*` | – | hashed frontend assets (`immutable` cache; traversal is rejected) |
 | `GET /health` | – | `{ ok, version }` (token-exempt) |
 | `POST /sessions` | `{}` | `201 { sessionId }` |
-| `POST /messages` | `{ sessionId, text }` | `202` (reply arrives over SSE) |
+| `POST /messages` | `{ sessionId, text }` | `202` (reply arrives over SSE); held with `409 { code: "credentials-required" }` while a mounted server lacks credentials — the page logs in and re-sends automatically |
 | `POST /sessions/{id}/cancel` | – | `202` — abort the running turn |
 | `GET /events?sessionId=` | – | SSE: `ready`/`assistant_delta`/`tool_call`/`tool_result`/`approval_required`/`approval_resolved`/`credential_required`/`turn_done`/`error`, 15s heartbeat |
 | `POST /approvals/{id}` | `{ decision: allow\|deny }` | `200`; unknown `404`; repeat `409` |
@@ -72,34 +72,37 @@ npm run build     # or: npm run watch
 | `POST /servers` | `{ servers: [full list] }` | `200`; validation `400`; read-only settings `503` |
 | `POST /servers/{name}/credentials` (alias `/token`) | `{ token }` or `{ username, password, loginUrl? }` | `200` — store credentials and remount; unknown `404`; stdio `400`; failed login `400` |
 
-## MCP server credentials (401/403 → page prompt: token OR username+password)
+## MCP server credentials (invisible auth; login only when input needs it)
 
-Target MCP servers that require auth do **not** take their credentials from the server config.
-When a streamable-http server rejects the connection or a tool call with 401/403, the bridge:
+Authentication is designed to be **invisible**: remembered credentials are re-submitted
+silently, and when a stored username+password session expires the bridge re-logs-in on its
+own — no dialog, no interruption. The login dialog appears only when the user actually sends
+a message and a mounted server still has no credentials:
 
-1. flags the server in `servers.json` (`auth: { required: true, reason, has? }`) and streams a
-   `credential_required { serverName, reason }` SSE event,
-2. the page opens a credential dialog with two modes (a remembered record from a previous
-   session is re-submitted automatically):
-   - **token** — pasted bearer token, sent as `Authorization: Bearer`;
-   - **username + password** — the bridge performs the login itself, robot-platform style:
-     `POST {loginUrl}` with JSON `{username, password}`; on 200 the session JWT is taken from
-     `Set-Cookie: auth_token=...` first, falling back to the response body's `token` field; the
-     JWT is then carried in BOTH forms (`Authorization: Bearer` + `Cookie: auth_token=`),
-     matching deployments where only one of the two middlewares is active,
-3. `POST /servers/{name}/credentials` stores everything **in host memory only** — the settings
-   layer never sees a credential — and remounts the server's mcp-client fiber with the merged
-   headers.
+1. `POST /messages` is **held** with `409 { code: "credentials-required", servers: [...] }` —
+   the turn never runs into certain 401s. The page opens the login dialog; cancelling simply
+   drops the held message.
+2. Once the login succeeds the page **re-sends the held message automatically**, so the
+   conversation continues exactly where it stopped ("logged in — continuing: …").
+3. A first-ever 401/403 that only surfaces mid-tool-call (the connection itself was fine) is
+   handled the same way: the `credential_required` SSE event opens the dialog and the
+   interrupted message is auto-continued after login.
+
+Credential modes (robot-platform compatible; stored **in host memory only** — the settings
+layer never sees a credential, and remounting merges them into the transport headers):
+
+- **token** — pasted bearer token, sent as `Authorization: Bearer`;
+- **username + password** — the bridge performs the login itself: `POST {loginUrl}` with JSON
+  `{username, password}`; on 200 the session JWT is taken from `Set-Cookie: auth_token=...`
+  first, falling back to the response body's `token` field; the JWT is then carried in BOTH
+  forms (`Authorization: Bearer` + `Cookie: auth_token=`), matching deployments where only one
+  of the two middlewares is active. On later 401/403s the bridge re-logs-in automatically.
 
 The `loginUrl` defaults to the entry's `auth.loginUrl` (optional field on streamable-http
-entries, see below) and otherwise to `<origin of url>/api/v1/auth/login`.
-
-When a later 401/403 arrives and username+password credentials are stored, the bridge
-**re-logs-in automatically** and remounts — no prompt. The page only gets involved when no
-credentials are stored or the login itself fails. Everything is lost on dsh restart (by design);
-the page caches credentials in `localStorage` purely to re-submit them for you. A stale
-streamable-http session (`session not found`) is healed separately: the watchdog remounts the
-fiber automatically, no credentials involved.
+entries, see below) and otherwise to `<origin of url>/api/v1/auth/login`. Everything is lost
+on dsh restart (by design); the page caches credentials in `localStorage` purely to re-submit
+them silently for you. A stale streamable-http session (`session not found`) is healed
+separately: the watchdog remounts the fiber automatically, no credentials involved.
 
 ## Configuration
 
