@@ -344,6 +344,7 @@ export class FakeAgents extends Service {
     this.store = new Map()
     this.emitTurn = null
     this.cancelCount = 0
+    this.injected = []
   }
   async create(options) {
     const session = this.ctx.sessions.create(options.sessionId, { meta: options.meta ?? {} })
@@ -354,6 +355,7 @@ export class FakeAgents extends Service {
       status: 'idle',
       followup(message) { void service.emitTurn?.(agent, message) },
       cancel() { service.cancelCount += 1 },
+      inject(message) { service.injected.push(message) },
     }
     const scope = createScope(this.ctx, agent)
     agent.ctx = scope.ctx.extend({ agent })

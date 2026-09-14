@@ -112,6 +112,13 @@ on dsh restart (by design); the page caches credentials in `localStorage` purely
 them silently for you. A stale streamable-http session (`session not found`) is healed
 separately: the watchdog remounts the fiber automatically, no credentials involved.
 
+When the MCP server restarts **mid-conversation**, the in-flight tool call still fails once
+(nothing can revive a request that hit a dead session). Right after the remount completes and
+the tools are live again, the bridge injects a steering notice into the conversation — "the
+server restarted, the session was rebuilt, the failed call was never executed; retry it" — so
+the model retries with the fresh session and the chat continues on its own. The page also
+receives a `session-rebuilt` informational frame.
+
 ## Configuration
 
 `servers` — composition/base layer of the effective MCP server list (the page edits the dsh

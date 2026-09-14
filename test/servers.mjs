@@ -7,7 +7,7 @@ import Tools from '@deepseek-ai/dsh-tools'
 import SessionStore from '@deepseek-ai/dsh-session'
 import {
   MemorySettings, ReadOnlySettings, FakeWebServer, FakeSystemPrompt, FakeAgents,
-  echoEntry, zombieEntry, authHttpMcpServer, call, waitFor, waitForRoute, check, finish,
+  echoEntry, zombieEntry, authHttpMcpServer, call, openSse, waitFor, waitForRoute, check, finish,
 } from './helpers.mjs'
 
 async function buildApp(settings = MemorySettings, servers = []) {
@@ -130,6 +130,40 @@ async function main() {
     const row = status.json?.servers?.find((s) => s.serverName === 'zombie')
     check('server healthy after remount', row?.state === 'connected' && row?.toolCount === 1, row)
     check('remount noted in diagnostics', (row?.logs ?? []).some((l) => l.includes('remounting')), row?.logs)
+
+    console.log('# engine: mid-conversation restart steers the model to retry')
+    {
+      // The failed call was recorded on a session the bridge does NOT own,
+      // so no steering may be injected for it.
+      const strayBefore = app.get('agents').injected.length
+      const agent = app.get('agents').store.get((await call(handler, 'POST', '/smart-chat/sessions', '{}')).json.sessionId)
+      const sse = openSse(handler, `/smart-chat/events?sessionId=${encodeURIComponent(agent.id)}`)
+      await waitFor(() => sse.frames().some((f) => f.event === 'ready'), { what: 'ready' })
+
+      agent.session.append('turn/start', { turn: 1 })
+      agent.session.append('tool/call', { turn: 1, step: 1, callId: 'r1', name: 'mcp__zombie__echo', arguments: '{}' })
+      agent.session.append('tool/result', {
+        turn: 1,
+        step: 1,
+        message: {
+          role: 'user',
+          content: [{ type: 'tool-result', toolCallId: 'r1', isError: true, content: [{ type: 'text', text: 'Error: Streamable HTTP error: Error POSTing to endpoint: session not found' }] }],
+          source: { kind: 'tool', callId: 'r1' },
+        },
+      }, { surfaceOp: 'append' })
+
+      const injectedMsg = await waitFor(() => {
+        const msg = app.get('agents').injected[app.get('agents').injected.length - 1]
+        return msg !== undefined && String(msg.content?.[0]?.text ?? '').includes('rebuilt') ? msg : undefined
+      }, { timeout: 20_000, what: 'session-rebuilt steering' })
+      check('no steering for the earlier non-bridge session', injectedMsg !== undefined && app.get('agents').injected.length >= 1)
+      const text = String(injectedMsg.content[0]?.text ?? '')
+      check('steering explains the restart', text.includes('restarted') && text.includes('Retry'), text.slice(0, 80))
+      check('steering is plugin-sourced', injectedMsg.source?.kind === 'plugin', injectedMsg.source)
+      const frame = await waitFor(() => sse.frames().find((f) => f.event === 'error' && f.data?.code === 'session-rebuilt'), { what: 'session-rebuilt frame' })
+      check('page notified of the rebuild', String(frame.data?.message ?? '').includes('rebuilt'), frame.data)
+      sse.req.emit('close')
+    }
 
     await app.fiber.dispose()
   }
