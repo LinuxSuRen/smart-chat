@@ -41,5 +41,8 @@ export function renderMarkdown(text: string): string {
   return DOMPurify.sanitize(withBanners, {
     ADD_ATTR: ['target'],
     FORBID_TAGS: ['style', 'script', 'iframe', 'form', 'input'],
+    // Default scheme whitelist has no data:; allow inline base64 images
+    // (assistant markdown and tool evidence) while keeping the rest strict.
+    ALLOWED_URI_REGEXP: /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$)|data:image\/(?:png|jpeg|webp|gif);base64,)/i,
   })
 }

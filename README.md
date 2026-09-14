@@ -66,7 +66,7 @@ npm run build     # or: npm run watch
 | `POST /sessions` | `{}` | `201 { sessionId }` |
 | `POST /messages` | `{ sessionId, text }` | `202` (reply arrives over SSE); held with `409 { code: "credentials-required" }` while a mounted server lacks credentials — the page logs in and re-sends automatically |
 | `POST /sessions/{id}/cancel` | – | `202` — abort the running turn |
-| `GET /events?sessionId=` | – | SSE: `ready`/`assistant_delta`/`tool_call`/`tool_result`/`approval_required`/`approval_resolved`/`credential_required`/`turn_done`/`error`, 15s heartbeat |
+| `GET /events?sessionId=` | – | SSE: `ready`/`assistant_delta`/`tool_call`/`tool_result`/`tool_images`/`approval_required`/`approval_resolved`/`credential_required`/`turn_done`/`error`, 15s heartbeat |
 | `POST /approvals/{id}` | `{ decision: allow\|deny }` | `200`; unknown `404`; repeat `409` |
 | `GET /servers.json` | – | per-server `state/toolCount/error/logs/tools` and `auth.required` for streamable-http entries |
 | `POST /servers` | `{ servers: [full list] }` | `200`; validation `400`; read-only settings `503` |
@@ -164,6 +164,21 @@ servers:
 - Session transcripts are not persisted across dsh restarts (a fresh page = a fresh session).
 - Do not install the legacy `dsh-plugin-mcp-chat` alongside this package: both mount
   `dsh-mcp-client` fibers per serverName and would duplicate the same servers.
+
+## Image rendering (base64)
+
+Two channels reach the page:
+
+- **Tool-result images** (`mcp__robot__ptz_capture` style captures): dsh-mcp-client stores MCP
+  image results in the dsh attachment service (facing the model). The bridge reads the bytes
+  back and streams them as base64 **data URLs** in a follow-up `tool_images { callId, images }`
+  SSE frame; the tool entry expands and renders them inline (≤8 images, ≤8 MB each). Reconnects
+  replay them (Last-Event-ID); a failed read drops the frame silently. Note the upstream gate:
+  images only exist when the deployment mounts an attachment store AND the model route declares
+  image input — otherwise dsh-mcp-client degrades them to `[image unavailable …]` text.
+- **Markdown images**: assistant output may embed `![alt](https://…)` (always worked) and
+  `![alt](data:image/png;base64,…)` — the sanitizer allows `data:image/(png|jpeg|webp|gif)`
+  URIs specifically, nothing else about the default scheme whitelist changes.
 
 ## Development
 

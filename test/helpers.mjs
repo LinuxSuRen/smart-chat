@@ -304,6 +304,31 @@ export class FakeWebServer extends Service {
 }
 
 /**
+ * Minimal attachments stub: enough of the dsh attachment store for the
+ * bridge's tool-image delivery (readImage). Bytes are placeholders.
+ */
+export class FakeAttachments extends Service {
+  static provide = 'attachments'
+  constructor(ctx, store = new Map()) {
+    super(ctx, 'attachments')
+    this.store = store
+    this.failReads = false
+  }
+  get imageLimits() { return {} }
+  async validateImage() {}
+  async saveImage() { throw new Error('not implemented in the stub') }
+  async readImage(ref) {
+    if (this.failReads) throw new Error('stub read failure')
+    const entry = this.store.get(ref.attachmentId)
+    if (entry === undefined) throw new Error(`attachment "${ref.attachmentId}" not stored`)
+    return { ref: entry.ref, data: entry.data }
+  }
+}
+
+// A real 1x1 transparent PNG (placeholder pixels, no secret).
+export const TINY_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+
+/**
  * Fake agents service: creates REAL sessions (via ctx.sessions) driven by a
  * test-supplied `emitTurn(agent, message)` script. Mirrors the real factory's
  * composition boundary: the create options' `setup` receives a genuinely

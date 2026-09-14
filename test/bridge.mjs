@@ -10,8 +10,9 @@ import Tools from '@deepseek-ai/dsh-tools'
 import SessionStore from '@deepseek-ai/dsh-session'
 import ApprovalSvc from '@deepseek-ai/dsh-user-approval'
 import {
-  MemorySettings, FakeWebServer, FakeAgents, FakeSystemPrompt, makeTurnScript,
-  echoEntry, authHttpMcpServer, call, openSse, waitFor, waitForRoute, scopeOf, check, finish,
+  MemorySettings, FakeWebServer, FakeAgents, FakeAttachments, FakeSystemPrompt, makeTurnScript,
+  echoEntry, authHttpMcpServer, TINY_PNG_BASE64,
+  call, openSse, waitFor, waitForRoute, scopeOf, check, finish,
 } from './helpers.mjs'
 
 /** Current effective server entries (for full-list replacement in tests). */
@@ -300,6 +301,84 @@ async function main() {
       }
     }
 
+    await app.fiber.dispose()
+  }
+
+  console.log('# tool images: attachment refs stream back as base64 data URLs')
+  {
+    const png = Buffer.from(TINY_PNG_BASE64, 'base64')
+    const store = new Map()
+    store.set('img-1', { ref: { attachmentId: 'img-1', mediaType: 'image/png', bytes: png.length, width: 1, height: 1 }, data: png })
+    const app = new Context()
+    await app.plugin(SessionStore).await()
+    await app.plugin(MemorySettings).await()
+    await app.plugin(FakeWebServer).await()
+    const attachments = (await app.plugin(FakeAttachments, store).await(), app.get('attachments'))
+    await app.plugin(FakeAgents).await()
+    const plugin = await import('../lib/index.js')
+    await app.plugin(plugin, { servers: [], bridge: { enabled: true, prefix: '/smart-chat' } }).await()
+    const handler = await waitForRoute(app.get('webServer'), '/smart-chat')
+
+    const created = await call(handler, 'POST', '/smart-chat/sessions', '{}')
+    const sessionId = created.json.sessionId
+    const sse = openSse(handler, `/smart-chat/events?sessionId=${encodeURIComponent(sessionId)}`)
+    await waitFor(() => sse.frames().some((f) => f.event === 'ready'), { what: 'ready' })
+
+    const session = app.get('agents').store.get(sessionId).session
+    session.append('turn/start', { turn: 1 })
+    session.append('tool/call', { turn: 1, step: 1, callId: 'imgcall', name: 'mcp__robot__ptz_capture', arguments: '{}' })
+    session.append('tool/result', {
+      turn: 1,
+      step: 1,
+      message: {
+        role: 'user',
+        content: [{
+          type: 'tool-result',
+          toolCallId: 'imgcall',
+          content: [
+            { type: 'text', text: 'captured' },
+            { type: 'image', attachment: { attachmentId: 'img-1', mediaType: 'image/png', bytes: png.length, width: 1, height: 1 } },
+          ],
+        }],
+        source: { kind: 'tool', callId: 'imgcall' },
+      },
+    }, { surfaceOp: 'append' })
+
+    const resultFrame = await waitFor(() => sse.frames().find((f) => f.event === 'tool_result'), { what: 'tool_result frame' })
+    check('tool_result keeps the text summary', resultFrame.data?.summary === 'captured', resultFrame.data)
+    const imagesFrame = await waitFor(() => sse.frames().find((f) => f.event === 'tool_images'), { what: 'tool_images frame' })
+    check('images frame keyed by callId', imagesFrame.data?.callId === 'imgcall', imagesFrame.data)
+    const url = String(imagesFrame.data?.images?.[0] ?? '')
+    check('image is a png data URL', url.startsWith('data:image/png;base64,'), url.slice(0, 40))
+    check('payload round-trips to the stored bytes', url.endsWith(TINY_PNG_BASE64), url.slice(-30))
+
+    // Replay after reconnect re-delivers (Last-Event-ID below the event).
+    const replay = openSse(handler, `/smart-chat/events?sessionId=${encodeURIComponent(sessionId)}`, { 'last-event-id': '0' })
+    const replayImages = await waitFor(() => replay.frames().find((f) => f.event === 'tool_images'), { what: 'replayed tool_images' })
+    check('replay includes the images', String(replayImages.data?.images?.[0] ?? '').endsWith(TINY_PNG_BASE64), replayImages.data?.callId)
+    replay.req.emit('close')
+
+    // A failing read drops the frame silently (no crash, no empty batch).
+    attachments.failReads = true
+    const session2 = app.get('agents').store.get(sessionId).session
+    session2.append('tool/call', { turn: 1, step: 2, callId: 'imgcall2', name: 'mcp__robot__ptz_capture', arguments: '{}' })
+    session2.append('tool/result', {
+      turn: 1,
+      step: 1,
+      message: {
+        role: 'user',
+        content: [{
+          type: 'tool-result',
+          toolCallId: 'imgcall2',
+          content: [{ type: 'image', attachment: { attachmentId: 'img-1', mediaType: 'image/png', bytes: png.length, width: 1, height: 1 } }],
+        }],
+        source: { kind: 'tool', callId: 'imgcall2' },
+      },
+    }, { surfaceOp: 'append' })
+    await waitFor(() => sse.frames().some((f) => f.event === 'tool_result' && f.data?.callId === 'imgcall2'), { what: 'second tool_result' })
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    check('failed read yields no images frame', !sse.frames().some((f) => f.event === 'tool_images' && f.data?.callId === 'imgcall2'))
+    sse.req.emit('close')
     await app.fiber.dispose()
   }
 

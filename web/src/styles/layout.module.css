@@ -353,3 +353,25 @@
   flex-direction: column;
   gap: 8px;
 }
+
+.toolImages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--dsw-alias-border-l1);
+}
+
+.toolImages img {
+  max-width: 100%;
+  max-height: 320px;
+  border-radius: 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  cursor: zoom-in;
+  object-fit: contain;
+  transition: max-height var(--ds-transition-duration) var(--ds-ease-in-out);
+}
+
+.toolImages img:hover {
+  border-color: var(--dsw-alias-border-l3);
+}

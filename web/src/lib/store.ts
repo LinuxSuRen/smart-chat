@@ -32,6 +32,10 @@ export interface ToolItem {
   state: 'running' | 'done' | 'error'
   summary?: string
   durationMs?: number
+  /** Base64 data URLs delivered by the follow-up tool_images SSE frame. */
+  images?: string[]
+  /** seq of the last applied images batch (replay dedup). */
+  imagesSeq?: number
 }
 
 export interface ApprovalItem {
@@ -184,6 +188,21 @@ export function makeDispatcher(onSessionNotFound: () => void): SseDispatch {
           state: data.isError === true ? 'error' : 'done',
           summary: typeof data.summary === 'string' ? data.summary : undefined,
           durationMs: typeof data.durationMs === 'number' ? data.durationMs : undefined,
+        }))
+        break
+      }
+      case 'tool_images': {
+        const callId = String(data.callId)
+        const item = [...state.feed].reverse().find((i): i is ToolItem => i.kind === 'tool' && i.callId === callId)
+        if (!item) break
+        const seq = typeof data.seq === 'number' ? data.seq : -1
+        // Replay/multi-subscriber can redeliver a batch; skip identical seq.
+        if ((item as ToolItem).imagesSeq === seq) break
+        const images = Array.isArray(data.images) ? data.images.filter((x) => typeof x === 'string') : []
+        patchItem(item.key, (i) => ({
+          ...(i as ToolItem),
+          images: [...((i as ToolItem).images ?? []), ...images],
+          imagesSeq: seq,
         }))
         break
       }

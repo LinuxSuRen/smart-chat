@@ -145,6 +145,7 @@ export interface ReadyEvent { sessionId: string }
 export interface AssistantDeltaEvent { seq: number; delta?: string; reasoning?: string }
 export interface ToolCallEvent { seq: number; callId: string; name: string; argsPreview: string }
 export interface ToolResultEvent { seq: number; callId: string; isError: boolean; summary: string; durationMs?: number }
+export interface ToolImagesEvent { seq: number; callId: string; images: string[] }
 export interface ApprovalRequiredEvent { approvalId: string; toolName: string; summary: string }
 export interface ApprovalResolvedEvent { approvalId: string; outcome: string }
 export interface TurnDoneEvent { seq: number; turn: number; reason: string }
@@ -156,6 +157,7 @@ export interface BridgeEvents {
   assistant_delta: AssistantDeltaEvent
   tool_call: ToolCallEvent
   tool_result: ToolResultEvent
+  tool_images: ToolImagesEvent
   approval_required: ApprovalRequiredEvent
   approval_resolved: ApprovalResolvedEvent
   turn_done: TurnDoneEvent

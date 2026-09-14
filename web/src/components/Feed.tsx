@@ -66,7 +66,7 @@ const TurnView = memo(function TurnView({ item }: { item: TurnItem }) {
 
 const ToolRow = memo(function ToolRow({ item }: { item: ToolItem }) {
   return (
-    <details className={styles.toolRoot} data-state={item.state} open={item.state === 'error'}>
+    <details className={styles.toolRoot} data-state={item.state} open={item.state === 'error' || (item.images?.length ?? 0) > 0}>
       <summary className={styles.toolSummary}>
         <span className={styles.toolDot} data-state={item.state} />
         <span className={styles.toolName}>{item.name}</span>
@@ -81,6 +81,13 @@ const ToolRow = memo(function ToolRow({ item }: { item: ToolItem }) {
         {`args: ${item.argsPreview}`}
         {item.summary !== undefined ? `\nresult: ${item.summary}` : ''}
       </div>
+      {(item.images?.length ?? 0) > 0 && (
+        <div className={styles.toolImages}>
+          {item.images?.map((src, index) => (
+            <img key={`${item.callId}-${index}`} src={src} alt={`result ${index + 1}`} loading="lazy" />
+          ))}
+        </div>
+      )}
     </details>
   )
 })

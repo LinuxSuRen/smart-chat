@@ -116,6 +116,7 @@ export function App() {
       assistant_delta: (d) => dispatch('assistant_delta', d as unknown as Record<string, unknown>),
       tool_call: (d) => dispatch('tool_call', d as unknown as Record<string, unknown>),
       tool_result: (d) => dispatch('tool_result', d as unknown as Record<string, unknown>),
+      tool_images: (d) => dispatch('tool_images', d as unknown as Record<string, unknown>),
       approval_required: (d) => dispatch('approval_required', d as unknown as Record<string, unknown>),
       approval_resolved: (d) => dispatch('approval_resolved', d as unknown as Record<string, unknown>),
       turn_done: (d) => {
