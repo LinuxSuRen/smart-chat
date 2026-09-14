@@ -177,8 +177,10 @@ async function main() {
       const docJson = JSON.stringify(app.get('settings').doc)
       check('settings layer has no Authorization', docJson.includes('Authorization') === false, docJson)
 
-      // Tool-call-time 403 (connection fine, call rejected) flips the flag
-      // without remounting; the SSE broadcast side is covered in bridge.mjs.
+      // A tool-call-time 403 from the system BEHIND an already-connected
+      // server must NOT prompt: the server carries its own credentials
+      // (robot-platform-mcp's -username/-password), so the rejection is its
+      // domain — it surfaces as a normal tool error and never gates messages.
       const session = app.get('sessions').create('session-auth-watchdog')
       session.append('turn/start', { turn: 1 })
       session.append('tool/call', { turn: 1, step: 1, callId: 'c2', name: 'mcp__authy__echo', arguments: '{}' })
@@ -191,11 +193,13 @@ async function main() {
           source: { kind: 'tool', callId: 'c2' },
         },
       }, { surfaceOp: 'append' })
-      const reFlagged = await waitFor(async () => {
-        const row = await rowOf('authy')
-        return row?.auth?.required === true ? row : undefined
-      }, { what: 'authy re-flagged after 403' })
-      check('403 tool result re-flags auth.required', reFlagged?.auth?.required === true, reFlagged)
+      await new Promise((resolve) => setTimeout(resolve, 600))
+      const notFlagged = await rowOf('authy')
+      check('downstream 403 does not prompt', notFlagged?.auth?.required === false, notFlagged?.auth)
+      const gateSession = await call(handler, 'POST', '/smart-chat/sessions', '{}')
+      const flowsAfter403 = await call(handler, 'POST', '/smart-chat/messages', JSON.stringify({ sessionId: gateSession.json.sessionId, text: 'hi' }))
+      check('messages not gated by downstream 403', flowsAfter403.status === 202, flowsAfter403.status)
+      check('downstream rejection noted in diagnostics', (notFlagged?.logs ?? []).some((l) => l.includes('carries its own credentials')), notFlagged?.logs)
 
       await app.fiber.dispose()
     } finally {
@@ -267,6 +271,35 @@ async function main() {
       const after = await rowOf('authy')
       check('still connected after re-login', after?.state === 'connected', after)
       check('no credential prompt raised', after?.auth?.required !== true, after?.auth)
+
+      console.log('# engine: a failing re-login (rotated password) DOES prompt and gate')
+      // Rotate the server-side password: the stored credentials can no
+      // longer refresh, so the bridge flags the server (this credential is
+      // OURS) and gates messages until the user re-enters them.
+      authServer.setPassword('demo-rotated-password')
+      const session2 = app.get('sessions').create('session-rotated')
+      session2.append('turn/start', { turn: 1 })
+      session2.append('tool/call', { turn: 1, step: 1, callId: 'c4', name: 'mcp__authy__echo', arguments: '{}' })
+      session2.append('tool/result', {
+        turn: 1,
+        step: 1,
+        message: {
+          role: 'user',
+          content: [{ type: 'tool-result', toolCallId: 'c4', isError: true, content: [{ type: 'text', text: 'Error POSTing to endpoint: 401 Unauthorized' }] }],
+          source: { kind: 'tool', callId: 'c4' },
+        },
+      }, { surfaceOp: 'append' })
+      const flagged = await waitFor(async () => {
+        const row = await rowOf('authy')
+        return row?.auth?.required === true ? row : undefined
+      }, { what: 'flagged after failed re-login' })
+      check('failed re-login flags auth.required', flagged?.auth?.required === true, flagged?.auth)
+      const gated2 = await call(handler, 'POST', '/smart-chat/messages', JSON.stringify({ sessionId: sid, text: 'again' }))
+      check('messages gated while re-login fails', gated2.status === 409, gated2.status)
+      const renewed = await call(handler, 'POST', '/smart-chat/servers/authy/credentials', JSON.stringify({ username: 'demo-user', password: 'demo-rotated-password' }))
+      check('re-entered credentials accepted', renewed.status === 200, renewed)
+      const ungated = await call(handler, 'POST', '/smart-chat/messages', JSON.stringify({ sessionId: sid, text: 'again' }))
+      check('messages flow after renewal', ungated.status === 202, ungated.status)
 
       await app.fiber.dispose()
     } finally {

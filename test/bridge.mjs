@@ -11,8 +11,14 @@ import SessionStore from '@deepseek-ai/dsh-session'
 import ApprovalSvc from '@deepseek-ai/dsh-user-approval'
 import {
   MemorySettings, FakeWebServer, FakeAgents, FakeSystemPrompt, makeTurnScript,
-  echoEntry, call, openSse, waitFor, waitForRoute, scopeOf, check, finish,
+  echoEntry, authHttpMcpServer, call, openSse, waitFor, waitForRoute, scopeOf, check, finish,
 } from './helpers.mjs'
+
+/** Current effective server entries (for full-list replacement in tests). */
+async function lastEntries(handler) {
+  const r = await call(handler, 'GET', '/smart-chat/servers.json')
+  return (r.json?.servers ?? []).map((s) => s.entry)
+}
 
 async function buildApp(bridgeOpts) {
   const app = new Context()
@@ -235,29 +241,63 @@ async function main() {
     await waitFor(() => !visible().includes('mcp__echo__echo'), { what: 'restriction dropped echo' })
     check('removed server tool disappears', !visible().includes('mcp__echo__echo'), visible())
 
-    console.log('# focus: 401 tool result broadcasts credential_required')
+    console.log('# focus: credential_required broadcasts only when the bridge owns the credential')
     {
-      const created = await call(handler, 'POST', '/smart-chat/sessions', '{}')
-      const sessionId = created.json.sessionId
-      const sse = openSse(handler, `/smart-chat/events?sessionId=${encodeURIComponent(sessionId)}`)
-      await waitFor(() => sse.frames().some((f) => f.event === 'ready'), { what: 'ready' })
-      const session = app.get('sessions').create('session-cred')
-      session.append('turn/start', { turn: 1 })
-      session.append('tool/call', { turn: 1, step: 1, callId: 'c9', name: 'mcp__echo2__echo', arguments: '{}' })
-      session.append('tool/result', {
+      // A 401 from behind an already-connected server is the MCP server's
+      // own credential domain — no prompt. The broadcast fires only when a
+      // stored bridge-side password can no longer refresh (rotated here).
+      const plain = app.get('sessions').create('session-plain401')
+      plain.append('turn/start', { turn: 1 })
+      plain.append('tool/call', { turn: 1, step: 1, callId: 'c8', name: 'mcp__echo2__echo', arguments: '{}' })
+      plain.append('tool/result', {
         turn: 1,
         step: 1,
         message: {
           role: 'user',
-          content: [{ type: 'tool-result', toolCallId: 'c9', isError: true, content: [{ type: 'text', text: 'Error POSTing to endpoint: 401 Unauthorized' }] }],
-          source: { kind: 'tool', callId: 'c9' },
+          content: [{ type: 'tool-result', toolCallId: 'c8', isError: true, content: [{ type: 'text', text: 'Error POSTing to endpoint: 401 Unauthorized' }] }],
+          source: { kind: 'tool', callId: 'c8' },
         },
       }, { surfaceOp: 'append' })
-      const frame = await waitFor(() => sse.frames().find((f) => f.event === 'credential_required'), { what: 'credential_required frame' })
-      check('frame names the server', frame.data?.serverName === 'echo2' && typeof frame.data?.reason === 'string', frame.data)
-      const tokenRoute = await call(handler, 'POST', `/smart-chat/servers/${encodeURIComponent(frame.data.serverName)}/token`, '{"token":"x"}')
-      check('stdio server token rejected 400', tokenRoute.status === 400, tokenRoute.status)
-      sse.req.emit('close')
+
+      const authServer = await authHttpMcpServer('demo-mcp-token')
+      try {
+        const add = await call(handler, 'POST', '/smart-chat/servers', JSON.stringify({
+          servers: [...await lastEntries(handler), { serverName: 'authy', transport: 'streamable-http', url: authServer.url, auth: { loginUrl: authServer.loginUrl } }],
+        }))
+        check('authy added', add.status === 200, add)
+        const login = await call(handler, 'POST', '/smart-chat/servers/authy/credentials', JSON.stringify({ username: 'demo-user', password: 'demo-password' }))
+        check('authy logged in', login.status === 200, login)
+        await waitFor(() => app.get('tools').schemas(undefined).some((s) => s.name === 'mcp__authy__echo'), { what: 'authy tools' })
+
+        const created = await call(handler, 'POST', '/smart-chat/sessions', '{}')
+        const sessionId = created.json.sessionId
+        const sse = openSse(handler, `/smart-chat/events?sessionId=${encodeURIComponent(sessionId)}`)
+        await waitFor(() => sse.frames().some((f) => f.event === 'ready'), { what: 'ready' })
+
+        authServer.setPassword('demo-rotated-password')
+        const session = app.get('sessions').create('session-cred')
+        session.append('turn/start', { turn: 1 })
+        session.append('tool/call', { turn: 1, step: 1, callId: 'c9', name: 'mcp__authy__echo', arguments: '{}' })
+        session.append('tool/result', {
+          turn: 1,
+          step: 1,
+          message: {
+            role: 'user',
+            content: [{ type: 'tool-result', toolCallId: 'c9', isError: true, content: [{ type: 'text', text: 'Error POSTing to endpoint: 401 Unauthorized' }] }],
+            source: { kind: 'tool', callId: 'c9' },
+          },
+        }, { surfaceOp: 'append' })
+
+        await new Promise((resolve) => setTimeout(resolve, 500))
+        check('no frame for the server-own-domain 401', !sse.frames().some((f) => f.event === 'credential_required' && f.data?.serverName === 'echo2'))
+        const frame = await waitFor(() => sse.frames().find((f) => f.event === 'credential_required' && f.data?.serverName === 'authy'), { what: 'credential_required frame for authy' })
+        check('frame carries the failed re-login reason', String(frame.data?.reason).includes('re-login failed'), frame.data)
+        const tokenRoute = await call(handler, 'POST', `/smart-chat/servers/echo2/token`, '{"token":"x"}')
+        check('stdio server token rejected 400', tokenRoute.status === 400, tokenRoute.status)
+        sse.req.emit('close')
+      } finally {
+        await authServer.close()
+      }
     }
 
     await app.fiber.dispose()

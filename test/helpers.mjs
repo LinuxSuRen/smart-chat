@@ -70,7 +70,7 @@ export function zombieEntry(serverName = 'zombie') {
 export async function authHttpMcpServer(expectedToken = 'demo-mcp-token', opts = {}) {
   const loginStyle = opts.loginStyle ?? 'cookie'
   const username = opts.username ?? 'demo-user'
-  const password = opts.password ?? 'demo-password'
+  let password = opts.password ?? 'demo-password'
   const jwtPrefix = opts.jwtPrefix ?? 'demo-jwt-'
   let jwtCounter = 0
   const state = { logins: 0, issuedJwts: [], sessionValid: true }
@@ -162,6 +162,8 @@ export async function authHttpMcpServer(expectedToken = 'demo-mcp-token', opts =
     logoutUrl: `${base}/api/v1/auth/logout`,
     calls,
     state,
+    /** Rotate the accepted password (simulates a server-side credential change). */
+    setPassword: (next) => { password = next },
     close: () => new Promise((resolve) => server.close(resolve)),
   }
 }

@@ -77,16 +77,24 @@ npm run build     # or: npm run watch
 Authentication is designed to be **invisible**: remembered credentials are re-submitted
 silently, and when a stored username+password session expires the bridge re-logs-in on its
 own — no dialog, no interruption. The login dialog appears only when the user actually sends
-a message and a mounted server still has no credentials:
+a message and a mounted server still has no credentials **for the hop smart-chat owns**:
 
 1. `POST /messages` is **held** with `409 { code: "credentials-required", servers: [...] }` —
    the turn never runs into certain 401s. The page opens the login dialog; cancelling simply
    drops the held message.
 2. Once the login succeeds the page **re-sends the held message automatically**, so the
    conversation continues exactly where it stopped ("logged in — continuing: …").
-3. A first-ever 401/403 that only surfaces mid-tool-call (the connection itself was fine) is
-   handled the same way: the `credential_required` SSE event opens the dialog and the
-   interrupted message is auto-continued after login.
+
+**Scope of the credential flow — the page/bridge → MCP endpoint hop only:**
+
+- The MCP **endpoint** rejects the connection with 401 (e.g. robot-platform-mcp deployed with
+  `-mcp-token`/`MCP_SERVER_TOKEN` admission) → flag + dialog; paste that admission token.
+- A bridge-stored **username+password** can no longer refresh (login endpoint rejects it) →
+  auto re-login first; the dialog appears only when the re-login itself fails.
+- A 401/403 coming from the system **behind** an already-connected MCP server (its own
+  platform credentials — robot-platform-mcp's `-username`/`-password` — or per-API
+  permissions) is **the server's credential domain**: it surfaces as a normal tool error,
+  never prompts, never gates messages. Fix those on the MCP server's own arguments/env.
 
 Credential modes (robot-platform compatible; stored **in host memory only** — the settings
 layer never sees a credential, and remounting merges them into the transport headers):
