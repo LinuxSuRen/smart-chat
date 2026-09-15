@@ -1,6 +1,6 @@
 {
   "name": "smart-chat",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Minimal MCP-driven AI chat web tool for DeepSeek Harness: a single-file chat page over plain REST+SSE, bridged to the dsh agent loop; every tool comes from MCP servers.",
   "type": "module",
   "main": "lib/index.js",
