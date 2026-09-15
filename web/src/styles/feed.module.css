@@ -136,6 +136,16 @@
   to { opacity: 1 }
 }
 
+.toolServer {
+  flex: none;
+  font-size: 11px;
+  line-height: 16px;
+  padding: 1px 8px;
+  border-radius: 9999px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-tertiary);
+}
+
 .toolName {
   font-family: var(--ds-font-family-code);
   font-size: 13px;

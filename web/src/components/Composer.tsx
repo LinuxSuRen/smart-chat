@@ -53,7 +53,7 @@ export const Composer = memo(function Composer({ disabled, busy, hint, onSend, o
             rows={1}
             value={value}
             disabled={disabled}
-            placeholder={disabled ? 'unavailable' : 'Message (Enter to send, Shift+Enter for newline)'}
+            placeholder={disabled ? '暂时不可用' : '输入消息，回车发送'}
             onChange={(ev) => setValue(ev.target.value)}
             onKeyDown={onKeyDown}
             aria-label="chat message"

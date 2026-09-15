@@ -269,11 +269,11 @@ export function App() {
       <header className={layout.header}>
         <div className={layout.titleRow}>
           <span className={layout.brand}>smart-chat</span>
-          <span className={layout.conn} data-ok={state.conn === 'open'} title={`SSE ${state.conn}`} />
+          <span className={layout.conn} data-ok={state.conn === 'open'} title={state.conn === 'open' ? '已连接' : '连接中断'} />
           <span className={layout.serverbar}>
             {state.serversError
-              ? `servers: error — ${state.serversError}`
-              : `servers: ${up}/${state.servers.length} up, ${toolCount} tools`}
+              ? '服务状态暂时无法获取'
+              : `服务 ${up}/${state.servers.length} 正常 · ${toolCount} 个功能`}
           </span>
           <div className={layout.headerActions}>
             <ServersPanel
@@ -285,13 +285,13 @@ export function App() {
               onToken={(name) => setServerAuth({ serverName: name, reason: '' })}
             />
             <button type="button" className={layout.ghost} onClick={() => openStream(sessionRef.current)}>
-              Reconnect
+              重新连接
             </button>
             <button type="button" className={layout.ghost} onClick={() => void newSession()}>
-              New chat
+              新对话
             </button>
-            <button type="button" className={layout.ghost} onClick={themeCycle} title="theme: follow system / light / dark">
-              {theme === 'system' ? 'Theme: auto' : theme === 'light' ? 'Theme: light' : 'Theme: dark'}
+            <button type="button" className={layout.ghost} onClick={themeCycle} title="外观：跟随系统 / 浅色 / 深色">
+              {theme === 'system' ? '外观：自动' : theme === 'light' ? '外观：浅色' : '外观：深色'}
             </button>
           </div>
         </div>

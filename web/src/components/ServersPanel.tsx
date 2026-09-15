@@ -76,43 +76,43 @@ export const ServersPanel = memo(function ServersPanel({ servers, error, open, o
       </button>
       <div className={styles.panel}>
         <div className={styles.panelBody}>
-          {error && <div className={styles.srvDetail}>{`status error: ${error}`}</div>}
+          {error && <div className={styles.srvDetail}>服务状态暂时无法获取</div>}
           {servers.map((s) => {
             const needsToken = s.auth?.required === true
             return (
               <div key={s.serverName} className={styles.srvRow}>
                 <span className={styles.srvName}>{s.serverName}</span>
                 <span className={styles.srvState} data-state={needsToken ? 'failed' : s.state}>
-                  {needsToken ? 'needs login' : s.state}
+                  {needsToken ? '需要登录' : friendlyState(s.state)}
                 </span>
                 <span className={styles.srvDetail}>
-                  {`${s.toolCount} tools`}
-                  {s.error ? ` — ${s.error}` : ''}
+                  {`${s.toolCount} 个功能`}
+                  {s.state === 'failed' || s.state === 'invalid' ? ' — 无法连接，请检查服务' : ''}
                 </span>
                 {needsToken && (
-                  <button type="button" className={styles.ghost} onClick={() => onToken(s.serverName, s.auth?.reason)}>
-                    login…
+                  <button type="button" className={styles.ghost} onClick={() => onToken(s.serverName)}>
+                    登录…
                   </button>
                 )}
                 <button type="button" className={styles.ghost} onClick={() => void remove(s.serverName)}>
-                  remove
+                  移除
                 </button>
               </div>
             )
           })}
-          {servers.length === 0 && <div className={styles.srvDetail}>no servers configured</div>}
+          {servers.length === 0 && <div className={styles.srvDetail}>还没有添加服务</div>}
           <form className={styles.addForm} onSubmit={(ev) => void onSubmit(ev)}>
-            <input name="serverName" placeholder="name (a-z 0-9 _ -)" size={16} required />
+            <input name="serverName" placeholder="服务名称 (a-z 0-9 _ -)" size={16} required />
             <select name="transport" defaultValue="streamable-http">
-              <option value="streamable-http">http</option>
-              <option value="stdio">stdio</option>
+              <option value="streamable-http">远程服务</option>
+              <option value="stdio">本地程序</option>
             </select>
-            <input name="url" placeholder="http://localhost:8090/mcp" size={26} />
-            <input name="command" placeholder="command" size={16} style={{ display: 'none' }} />
-            <input name="args" placeholder="args, comma separated" size={18} style={{ display: 'none' }} />
-            <input name="kv" placeholder="headers / env as KEY=value lines" size={30} />
+            <input name="url" placeholder="服务地址 http://localhost:8090/mcp" size={26} />
+            <input name="command" placeholder="启动命令" size={16} style={{ display: 'none' }} />
+            <input name="args" placeholder="启动参数，逗号分隔" size={18} style={{ display: 'none' }} />
+            <input name="kv" placeholder="额外设置（格式 KEY=value，可留空）" size={30} />
             <button type="submit" className={styles.ghost}>
-              Add server
+              添加服务
             </button>
           </form>
         </div>
@@ -120,3 +120,16 @@ export const ServersPanel = memo(function ServersPanel({ servers, error, open, o
     </>
   )
 })
+
+/** Non-technical state labels — raw fiber states never reach the panel. */
+function friendlyState(state: string): string {
+  switch (state) {
+    case 'connected': return '正常'
+    case 'connecting': return '连接中'
+    case 'failed': return '无法连接'
+    case 'invalid': return '配置有误'
+    case 'disposed':
+    case 'removed': return '已移除'
+    default: return state
+  }
+}
